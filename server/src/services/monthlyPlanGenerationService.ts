@@ -63,10 +63,18 @@ import {
 } from './planningReplayCalibrationService.js'
 import {
   effectiveConstructionCalendarBasis,
+  isAuthoritativeConstructionCalendar,
   isConstructionProductionDay,
+  productionDaysBetweenInclusive,
   resolveConstructionCalendarContext,
   type ConstructionCalendarContext,
 } from './constructionCalendar.js'
+import {
+  businessDateKey,
+  normalizeDurationMetricDto,
+  normalizeRfc3339Timestamp,
+  type DurationMetricDto,
+} from './durationMetricService.js'
 import { isActiveWarning } from '../utils/warningStatus.js'
 import type { MonthlyPlan, MonthlyPlanItem, Task, TaskBaseline, TaskBaselineItem } from '../types/db.js'
 
@@ -224,27 +232,75 @@ export type MonthWindow = {
 
 type MonthlyE2ForecastSummary = {
   remainingDurationDays: number | null
+  remainingDuration: DurationMetricDto | null
   forecastFinishDate: string | null
   forecastDelayDays: number | null
   confidenceLevel: string
 }
 
 function readAvailableProductionDuration(
-  metric: { value?: unknown; unit?: unknown; availability?: unknown } | null | undefined,
+  metricValue: unknown,
 ) {
-  if (metric?.availability !== 'available' || metric.unit !== 'construction_production_day') return null
-  const value = Number(metric.value)
-  return Number.isFinite(value) ? value : null
+  const metric = normalizeDurationMetricDto(metricValue)
+  if (
+    !metric
+    || metric.availability !== 'available'
+    || metric.unit !== 'construction_production_day'
+    || metric.value === null
+    || metric.value < 0
+    || !normalizeText(metric.calendarRef)
+    || !normalizeText(metric.calendarVersion)
+    || !normalizeText(metric.timezone)
+    || !normalizeText(metric.asOf)
+  ) return null
+  return metric
+}
+
+function sameDurationMetricIdentity(left: DurationMetricDto, right: DurationMetricDto) {
+  return left.unit === right.unit
+    && left.calendarRef === right.calendarRef
+    && left.calendarVersion === right.calendarVersion
+    && left.timezone === right.timezone
+    && left.asOf === right.asOf
+}
+
+function readFreshSnapshotFloatDuration(
+  metricValue: unknown,
+  projectDurationValue: unknown,
+  calculatedAtValue: unknown,
+) {
+  const metric = normalizeDurationMetricDto(metricValue)
+  const projectDuration = normalizeDurationMetricDto(projectDurationValue)
+  const normalizedCalculatedAt = normalizeRfc3339Timestamp(calculatedAtValue)
+  const calculatedAt = normalizedCalculatedAt ? new Date(normalizedCalculatedAt) : null
+  if (
+    !metric
+    || !projectDuration
+    || metric.availability !== 'available'
+    || projectDuration.availability !== 'available'
+    || metric.unit !== 'construction_production_day'
+    || projectDuration.unit !== 'construction_production_day'
+    || metric.value === null
+    || metric.value < 0
+    || !sameDurationMetricIdentity(metric, projectDuration)
+    || calculatedAt === null
+    || metric.asOf !== businessDateKey(calculatedAt, metric.timezone)
+  ) return null
+  return metric.value
 }
 
 function toMonthlyE2ForecastSummary(forecast: Awaited<ReturnType<typeof forecastBatchTasks>>[number]): MonthlyE2ForecastSummary {
-  const remainingDurationDays = readAvailableProductionDuration(forecast.remainingDuration)
-  const forecastDelayDays = readAvailableProductionDuration(forecast.forecastDelay)
+  const remainingDuration = readAvailableProductionDuration(forecast.remainingDuration)
+  const forecastDelay = readAvailableProductionDuration(forecast.forecastDelay)
+  const tupleAvailable = remainingDuration !== null
+    && forecastDelay !== null
+    && sameDurationMetricIdentity(remainingDuration, forecastDelay)
   return {
-    remainingDurationDays,
-    forecastFinishDate: remainingDurationDays === null ? null : forecast.forecastFinishDate,
-    forecastDelayDays,
-    confidenceLevel: normalizeText(forecast.confidenceLevel) || 'unknown',
+    remainingDurationDays: tupleAvailable ? remainingDuration.value : null,
+    remainingDuration: tupleAvailable ? remainingDuration : null,
+    forecastFinishDate: tupleAvailable ? forecast.forecastFinishDate : null,
+    forecastDelayDays: tupleAvailable ? forecastDelay.value : null,
+    confidenceLevel: tupleAvailable ? normalizeText(forecast.confidenceLevel) || 'unknown' : 'unavailable',
   }
 }
 
@@ -1258,12 +1314,7 @@ async function getForecastMetrics(
       forecastDelayedCount: 0,
       maxForecastDelayDays: 0,
       lowConfidenceReasonCount: 0,
-      forecastsByTaskId: new Map<string, {
-        remainingDurationDays: number | null
-        forecastFinishDate: string | null
-        forecastDelayDays: number | null
-        confidenceLevel: string
-      }>(),
+      forecastsByTaskId: new Map<string, MonthlyE2ForecastSummary>(),
     }
   }
 
@@ -1284,23 +1335,13 @@ async function getForecastMetrics(
         summary.maxForecastDelayDays = Math.max(summary.maxForecastDelayDays, delay)
       }
       if (forecast.confidenceLevel === 'low') summary.lowConfidenceReasonCount += 1
-      summary.forecastsByTaskId.set(taskId, {
-        remainingDurationDays: forecast.remainingDurationDays,
-        forecastFinishDate: forecast.forecastFinishDate,
-        forecastDelayDays: delay,
-        confidenceLevel: forecast.confidenceLevel,
-      })
+      summary.forecastsByTaskId.set(taskId, forecast)
       return summary
     }, {
       forecastDelayedCount: 0,
       maxForecastDelayDays: 0,
       lowConfidenceReasonCount: 0,
-      forecastsByTaskId: new Map<string, {
-        remainingDurationDays: number | null
-        forecastFinishDate: string | null
-        forecastDelayDays: number | null
-        confidenceLevel: string
-      }>(),
+      forecastsByTaskId: new Map<string, MonthlyE2ForecastSummary>(),
     })
   } catch (error) {
     logger.warn('[monthlyPlanGenerationService] duration forecast unavailable for monthly plan generation', { error })
@@ -1308,12 +1349,7 @@ async function getForecastMetrics(
       forecastDelayedCount: 0,
       maxForecastDelayDays: 0,
       lowConfidenceReasonCount: 1,
-      forecastsByTaskId: new Map<string, {
-        remainingDurationDays: number | null
-        forecastFinishDate: string | null
-        forecastDelayDays: number | null
-        confidenceLevel: string
-      }>(),
+      forecastsByTaskId: new Map<string, MonthlyE2ForecastSummary>(),
     }
   }
 }
@@ -1385,6 +1421,7 @@ async function monthCapacityBudgetContext(projectId: string, monthWindow: MonthW
       calendarBasis: effectiveConstructionCalendarBasis(constructionCalendar),
       calendarSource: 'resolveConstructionCalendarContext',
       calendarShutdownDeductedDays,
+      constructionCalendar,
     }
   }
   const calendarProductivityFactor = await getMonthProductivity(projectId, monthWindow)
@@ -1402,6 +1439,7 @@ async function monthCapacityBudgetContext(projectId: string, monthWindow: MonthW
     calendarBasis: effectiveConstructionCalendarBasis(constructionCalendar),
     calendarSource: 'resolveConstructionCalendarContext',
     calendarShutdownDeductedDays,
+    constructionCalendar,
   }
 }
 
@@ -1532,9 +1570,19 @@ function criticalFloatTier(floatDays: number | null | undefined): 'true_critical
 }
 
 async function buildFreshFloatContext(projectId: string, items: MonthlyPlanSeedItem[]) {
-  if (!items.some((item) => item.source_task_id)) return new Map<string, Record<string, unknown>>()
+  if (items.length === 0) return new Map<string, Record<string, unknown>>()
   try {
     const snapshot = await getProjectCriticalPathSnapshot(projectId)
+    const snapshotStatus = normalizeText(snapshot.calculationStatus) || 'unknown'
+    if (snapshotStatus !== 'fresh') {
+      return new Map(items.map((item) => [getStableCandidateKey(item), {
+        fresh_float_days: null,
+        fresh_float_authority_checked: true,
+        fresh_float_snapshot_source: 'projectCriticalPathService.getProjectCriticalPathSnapshot',
+        fresh_float_snapshot_status: snapshotStatus,
+        critical_float_tier: null,
+      }]))
+    }
     const scheduleRows = Array.isArray((snapshot as any).networkSchedule) && (snapshot as any).networkSchedule.length > 0
       ? (snapshot as any).networkSchedule
       : (snapshot.tasks ?? [])
@@ -1544,16 +1592,28 @@ async function buildFreshFloatContext(projectId: string, items: MonthlyPlanSeedI
     return new Map(items.map((item) => {
       const taskId = normalizeText(item.source_task_id)
       const task = taskId ? byTaskId.get(taskId) : null
-      const floatDays = readAvailableProductionDuration(task?.float)
+      const floatDays = readFreshSnapshotFloatDuration(
+        task?.float,
+        snapshot.projectDuration,
+        snapshot.calculatedAt,
+      )
       return [getStableCandidateKey(item), {
         fresh_float_days: floatDays,
+        fresh_float_authority_checked: true,
         fresh_float_snapshot_source: 'projectCriticalPathService.getProjectCriticalPathSnapshot',
-        ...(floatDays === null ? {} : { critical_float_tier: criticalFloatTier(floatDays) }),
+        fresh_float_snapshot_status: snapshotStatus,
+        critical_float_tier: floatDays === null ? null : criticalFloatTier(floatDays),
       }]
     }))
   } catch (error) {
     logger.debug('[monthlyPlanGenerationService] fresh critical-path snapshot unavailable for monthly plan generation', { projectId, error })
-    return new Map()
+    return new Map(items.map((item) => [getStableCandidateKey(item), {
+      fresh_float_days: null,
+      fresh_float_authority_checked: true,
+      fresh_float_snapshot_source: 'projectCriticalPathService.getProjectCriticalPathSnapshot',
+      fresh_float_snapshot_status: 'unavailable',
+      critical_float_tier: null,
+    }]))
   }
 }
 
@@ -1568,10 +1628,13 @@ function estimateMonthlyCapacityDemand(item: MonthlyPlanSeedItem, forecastMetric
 
 function monthlyCapacityPriority(item: MonthlyPlanSeedItem): MonthlyCapacityPriority {
   if (item.carryover_from_item_id || item.commitment_status === 'carried_over') return 'carryover'
-  const floatTier = readAlgorithmContext(item).critical_float_tier
-  if (floatTier === 'true_critical') return 'critical'
-  if (floatTier === 'near_critical') return 'near_critical'
-  if (floatTier === 'pseudo_critical') return 'new_work'
+  const context = readAlgorithmContext(item)
+  const floatTier = context.critical_float_tier
+  if (context.fresh_float_authority_checked === true) {
+    if (floatTier === 'true_critical') return 'critical'
+    if (floatTier === 'near_critical') return 'near_critical'
+    return 'new_work'
+  }
   if (item.is_critical) return 'critical'
   return 'new_work'
 }
@@ -1582,17 +1645,16 @@ function monthlyReadinessTargetFactor(readiness: ReturnType<typeof readinessPool
   return 1
 }
 
-function workdaysBetweenInclusive(start: Date, end: Date) {
-  const cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()))
-  const stop = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate()))
-  if (stop < cursor) return 0
-  let count = 0
-  while (cursor <= stop) {
-    const day = cursor.getUTCDay()
-    if (day !== 0 && day !== 6) count += 1
-    cursor.setUTCDate(cursor.getUTCDate() + 1)
-  }
-  return count
+function matchesConstructionCalendarIdentity(
+  metric: DurationMetricDto | null | undefined,
+  calendar: ConstructionCalendarContext | null | undefined,
+) {
+  return metric !== null
+    && metric !== undefined
+    && isAuthoritativeConstructionCalendar(calendar)
+    && metric.calendarRef === calendar.calendarRef
+    && metric.calendarVersion === calendar.calendarVersion
+    && metric.timezone === calendar.timezone
 }
 
 function calculateE2CompletableTarget(params: {
@@ -1601,11 +1663,13 @@ function calculateE2CompletableTarget(params: {
   plannedDelta: number
   forecast?: {
     remainingDurationDays: number | null
+    remainingDuration: DurationMetricDto | null
     forecastFinishDate: string | null
   } | null
   budgetDays: number
   monthStartDate?: string | null
   monthEndDate?: string | null
+  constructionCalendar?: ConstructionCalendarContext | null
 }) {
   const e2Days = Number(params.forecast?.remainingDurationDays ?? 0)
   const byRemainingDays = e2Days > 0
@@ -1618,13 +1682,16 @@ function calculateE2CompletableTarget(params: {
   if (!forecastFinish || !monthStart || !monthEnd || forecastFinish <= monthEnd) {
     return byRemainingDays
   }
+  if (!matchesConstructionCalendarIdentity(params.forecast?.remainingDuration, params.constructionCalendar)) {
+    return byRemainingDays
+  }
 
-  const monthWorkdays = workdaysBetweenInclusive(monthStart, monthEnd)
-  const forecastWindowWorkdays = workdaysBetweenInclusive(monthStart, forecastFinish)
-  if (forecastWindowWorkdays <= 0) return byRemainingDays
+  const monthProductionDays = productionDaysBetweenInclusive(monthStart, monthEnd, params.constructionCalendar)
+  const forecastWindowProductionDays = productionDaysBetweenInclusive(monthStart, forecastFinish, params.constructionCalendar)
+  if (forecastWindowProductionDays <= 0) return byRemainingDays
   const finishWindowTarget = Math.max(
     params.current,
-    Math.min(params.target, Math.round(params.current + (params.plannedDelta * Math.min(1, monthWorkdays / forecastWindowWorkdays)))),
+    Math.min(params.target, Math.round(params.current + (params.plannedDelta * Math.min(1, monthProductionDays / forecastWindowProductionDays)))),
   )
   return Math.min(byRemainingDays, finishWindowTarget)
 }
@@ -1790,6 +1857,7 @@ function applyMonthlyCapacityGovernance(
       budgetDays,
       monthStartDate: capacityBudget.monthStartDate,
       monthEndDate: capacityBudget.monthEndDate,
+      constructionCalendar: capacityBudget.constructionCalendar,
     })
     const calibratedE2Target = Math.max(
       current,

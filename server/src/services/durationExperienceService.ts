@@ -29,8 +29,14 @@ import {
   isAuthoritativeConstructionCalendar,
   productionDaysBetweenInclusive,
   resolveConstructionCalendarContext,
+  type ConstructionCalendarContext,
 } from './constructionCalendar.js'
 import { normalizeDurationDateUtc, orderedInclusiveDurationDays } from '../utils/durationDays.js'
+import {
+  businessDateKey,
+  normalizeDurationMetricDto,
+  normalizeRfc3339Timestamp,
+} from './durationMetricService.js'
 import { readTrustedDurationLearningRuntimeConsumptionsForTask } from './durationLearningRuntimeConsumptionService.js'
 import { readTaskStructuredCauseAuthority } from './taskStructuredCauseAuthorityService.js'
 import {
@@ -175,8 +181,10 @@ async function buildForecastLearningObservation(params: {
   actualEndSource: string
   plannedDuration: number
   actualDuration: number
+  constructionCalendar: ConstructionCalendarContext
 }) {
   if (params.actualStartSource !== 'actual_start_date' || params.actualEndSource !== 'actual_end_date') return null
+  if (!isAuthoritativeConstructionCalendar(params.constructionCalendar)) return null
 
   const taskId = normalizeText(params.task.id)
   if (!taskId) return null
@@ -184,7 +192,7 @@ async function buildForecastLearningObservation(params: {
     const table = (supabase as any).from?.('task_duration_forecasts')
     if (!table?.select) return null
     let query = table
-      .select('id, generated_at, forecast_finish_date, remaining_duration_days, execution_reference_days, forecast_error_days, model_version, forecast_source, duration_calibration_source')
+      .select('id, generated_at, forecast_finish_date, remaining_duration_days, execution_reference_days, metadata, forecast_error_days, model_version, forecast_source, duration_calibration_source')
       .eq('task_id', taskId)
     if (typeof query.order === 'function') query = query.order('generated_at', { ascending: false })
     if (typeof query.limit === 'function') query = query.limit(1)
@@ -195,12 +203,29 @@ async function buildForecastLearningObservation(params: {
     const forecast = result?.data
     if (!forecast) return null
 
+    const generatedAt = normalizeRfc3339Timestamp(forecast.generated_at)
+    if (!generatedAt) return null
+    const generatedAtDate = new Date(generatedAt)
+    const expectedAsOf = businessDateKey(generatedAtDate, params.constructionCalendar.timezone)
+    const metadata = readRecord(forecast.metadata)
+    const executionReferenceDuration = normalizeDurationMetricDto(
+      metadata.executionReferenceDuration ?? metadata.execution_reference_duration,
+    )
+    if (
+      !executionReferenceDuration
+      || executionReferenceDuration.availability !== 'available'
+      || executionReferenceDuration.unit !== 'construction_production_day'
+      || executionReferenceDuration.calendarRef !== params.constructionCalendar.calendarRef
+      || executionReferenceDuration.calendarVersion !== params.constructionCalendar.calendarVersion
+      || executionReferenceDuration.timezone !== params.constructionCalendar.timezone
+      || executionReferenceDuration.asOf !== expectedAsOf
+    ) return null
+
+    const forecastDurationDays = readPositiveInt(executionReferenceDuration.value)
+    if (!forecastDurationDays) return null
     const executionReferenceDays = readPositiveInt(forecast.execution_reference_days)
     const remainingDurationDays = readPositiveInt(forecast.remaining_duration_days)
     const forecastFinishDate = normalizeText(forecast.forecast_finish_date)
-    const derivedFromStart = orderedInclusiveDurationDays(params.actualStart, forecastFinishDate)
-    const forecastDurationDays = executionReferenceDays ?? derivedFromStart ?? remainingDurationDays
-    if (!forecastDurationDays) return null
 
     const forecastRatio = readPositiveNumber(params.actualDuration / forecastDurationDays)
     const planRatio = readPositiveNumber(params.actualDuration / params.plannedDuration)
@@ -211,11 +236,7 @@ async function buildForecastLearningObservation(params: {
       forecast_generated_at: normalizeText(forecast.generated_at),
       forecast_finish_date: forecastFinishDate,
       forecast_duration_days: forecastDurationDays,
-      forecast_duration_source: executionReferenceDays
-        ? 'execution_reference_days'
-        : derivedFromStart
-          ? 'actual_start_to_forecast_finish'
-          : 'remaining_duration_days',
+      forecast_duration_source: 'execution_reference_duration',
       remaining_duration_days: remainingDurationDays,
       execution_reference_days: executionReferenceDays,
       forecast_error_days: readPositiveNumber(forecast.forecast_error_days),
@@ -771,6 +792,7 @@ export async function collectDurationExperienceSampleFromTask(
     actualEndSource: actualEnd.source,
     plannedDuration,
     actualDuration,
+    constructionCalendar,
   })
   const now = new Date().toISOString()
   const actualStartMonth = actualStartDate.getUTCMonth() + 1

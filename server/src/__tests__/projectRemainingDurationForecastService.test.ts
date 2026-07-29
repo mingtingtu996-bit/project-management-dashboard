@@ -18,6 +18,61 @@ function productionDayMetric(value: number | null) {
   }
 }
 
+function availableProductionDayMetric(
+  value: number,
+  options: {
+    asOf?: string
+    calendarRef?: string
+    calendarVersion?: string
+    timezone?: string
+  } = {},
+) {
+  return {
+    value,
+    unit: 'construction_production_day' as const,
+    calendarRef: options.calendarRef ?? 'work_calendar',
+    calendarVersion: options.calendarVersion ?? 'calendar-v1',
+    timezone: options.timezone ?? 'Asia/Shanghai',
+    asOf: options.asOf ?? '2026-06-10',
+    availability: 'available' as const,
+    unavailableReason: null,
+  }
+}
+
+function availableProbabilityMetrics(
+  p20: number,
+  p50: number,
+  p80: number,
+  options: Parameters<typeof availableProductionDayMetric>[1] = {},
+) {
+  return {
+    p20RemainingDuration: availableProductionDayMetric(p20, options),
+    p50RemainingDuration: availableProductionDayMetric(p50, options),
+    p80RemainingDuration: availableProductionDayMetric(p80, options),
+  }
+}
+
+function unavailableProbabilityMetrics(asOf = '2026-06-10') {
+  return {
+    p20RemainingDuration: { ...productionDayMetric(null), asOf },
+    p50RemainingDuration: { ...productionDayMetric(null), asOf },
+    p80RemainingDuration: { ...productionDayMetric(null), asOf },
+  }
+}
+
+function probabilityMetricsWithOverride(
+  p20: number,
+  p50: number,
+  p80: number,
+  override: Record<string, unknown>,
+) {
+  return {
+    p20RemainingDuration: { ...availableProductionDayMetric(p20), ...override },
+    p50RemainingDuration: { ...availableProductionDayMetric(p50), ...override },
+    p80RemainingDuration: { ...availableProductionDayMetric(p80), ...override },
+  }
+}
+
 function createRecordingQueryExec() {
   const calls: Array<{ sql: string, params: unknown[] }> = []
   const queryExec = async <T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> => {
@@ -190,6 +245,63 @@ describe('projectRemainingDurationForecastService', () => {
         latestGateFinishDate: '2026-06-28',
       }),
     }))
+  })
+
+  it('ignores a raw remaining-duration alias when the typed fact is unavailable', () => {
+    const forecast = buildAvailableProjectRemainingDurationForecast({
+      rows: [row({
+        values: {
+          ...row().values,
+          planned_end_date: '2026-06-20',
+          remaining_duration_days: 2,
+          remaining_duration: {
+            value: null,
+            unit: 'construction_production_day',
+            calendarRef: 'work_calendar',
+            calendarVersion: 'calendar-v1',
+            timezone: 'Asia/Shanghai',
+            asOf: '2026-06-10',
+            availability: 'unavailable',
+            unavailableReason: 'duration_value_missing',
+          },
+        },
+      })],
+      asOfDate: '2026-06-10',
+      targetEndDate: '2026-06-25',
+    })
+
+    expect(forecast.forecastFinishDate).toBe('2026-06-20')
+    expect(forecast.projectRemainingForecast).toEqual(expect.objectContaining({
+      value: 11,
+      unit: 'construction_production_day',
+      availability: 'available',
+    }))
+  })
+
+  it.each([
+    ['wrong unit', { unit: 'calendar_day' }],
+    ['wrong calendar ref', { calendarRef: 'other_calendar' }],
+    ['wrong calendar version', { calendarVersion: 'calendar-v2' }],
+    ['wrong timezone', { timezone: 'UTC' }],
+    ['stale asOf', { asOf: '2026-06-09' }],
+  ])('rejects typed remaining duration with %s', (_label, override) => {
+    const forecast = buildAvailableProjectRemainingDurationForecast({
+      rows: [row({
+        values: {
+          ...row().values,
+          planned_end_date: '2026-06-20',
+          remaining_duration_days: 2,
+          remaining_duration: {
+            ...availableProductionDayMetric(2),
+            ...override,
+          },
+        },
+      })],
+      asOfDate: '2026-06-10',
+    })
+
+    expect(forecast.forecastFinishDate).toBe('2026-06-20')
+    expect(forecast.projectRemainingForecast.value).toBe(11)
   })
 
   it('keeps confirmed monthly commitments as soft pressure instead of pushing the project finish boundary', () => {
@@ -411,6 +523,7 @@ describe('projectRemainingDurationForecastService', () => {
             ...row().values,
             planned_end_date: '2026-06-20',
             forecast_finish_date: '2026-06-26',
+            remaining_duration: availableProductionDayMetric(17),
             is_critical: true,
             total_float_days: 0,
             free_float_days: 0,
@@ -494,7 +607,7 @@ describe('projectRemainingDurationForecastService', () => {
     expect(forecast.projectRemainingForecastDays).toBeGreaterThanOrEqual(20)
   })
 
-  it('widens the project remaining finish with E2 confidence bands, CP span and runtime pressure', () => {
+  it('ignores raw CP span while applying typed E2 confidence bands and runtime pressure', () => {
     const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: [
         row({
@@ -503,8 +616,8 @@ describe('projectRemainingDurationForecastService', () => {
             ...row().values,
             planned_start_date: '2026-06-01',
             planned_end_date: '2026-06-20',
-            forecast_finish_date: '2026-06-20',
-            forecast_p80_finish_date: '2026-06-24',
+            remaining_duration: availableProductionDayMetric(11),
+            probability_duration_metrics: availableProbabilityMetrics(9, 11, 15),
             critical_path_span_days: 18,
             is_critical: true,
             total_float_days: 0,
@@ -556,16 +669,16 @@ describe('projectRemainingDurationForecastService', () => {
       },
     })
 
-    expect(forecast.forecastFinishDate).toBe('2026-06-28')
-    expect(forecast.projectRemainingForecastDays).toBe(19)
+    expect(forecast.forecastFinishDate).toBe('2026-06-25')
+    expect(forecast.projectRemainingForecastDays).toBe(16)
     expect(forecast.calculationContext.criticalPath).toEqual(expect.objectContaining({
       latestCriticalFinishDate: '2026-06-20',
       confidenceBandFinishDate: '2026-06-24',
-      criticalPathSpanFinishDate: '2026-06-27',
+      criticalPathSpanFinishDate: null,
     }))
     expect(forecast.calculationContext.runtimeAdjustment).toEqual(expect.objectContaining({
       pressureProgressExtraDays: 1,
-      adjustedInternalFinishDate: '2026-06-28',
+      adjustedInternalFinishDate: '2026-06-25',
       evidenceObjects: expect.arrayContaining([
         expect.objectContaining({
           code: 'resource_pressure_high',
@@ -585,7 +698,10 @@ describe('projectRemainingDurationForecastService', () => {
     }))
   })
 
-  it('orders inverted E2 confidence-band dates before choosing the governing project finish', () => {
+  it.each([
+    ['P20 exceeds P50', 16, 9, 30],
+    ['P50 exceeds P80', 7, 16, 9],
+  ])('rejects inverted typed E2 percentiles when %s', (_label, p20, p50, p80) => {
     const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: [
         row({
@@ -594,9 +710,8 @@ describe('projectRemainingDurationForecastService', () => {
             ...row().values,
             planned_end_date: '2026-06-20',
             total_float_days: 0,
-            forecast_finish_date: '2026-06-20',
-            forecast_p20_finish_date: '2026-07-05',
-            forecast_p80_finish_date: '2026-06-18',
+            remaining_duration: availableProductionDayMetric(11),
+            probability_duration_metrics: availableProbabilityMetrics(p20, p50, p80),
           },
         }),
       ],
@@ -604,16 +719,20 @@ describe('projectRemainingDurationForecastService', () => {
       targetEndDate: '2026-06-25',
     })
 
-    expect(forecast.forecastFinishDate).toBe('2026-07-05')
+    expect(forecast.forecastFinishDate).toBe('2026-06-20')
     expect(forecast.calculationContext.criticalPath).toEqual(expect.objectContaining({
-      optimisticBandFinishDate: '2026-06-18',
-      confidenceBandFinishDate: '2026-07-05',
+      optimisticBandFinishDate: null,
+      confidenceBandFinishDate: null,
       confidenceBandDecision: expect.objectContaining({
-        status: 'applied',
-        governingFinishSource: 'confidence_band',
+        status: 'not_applicable',
+        governingFinishSource: 'deterministic_finish',
       }),
     }))
-    expect((forecast.calculationContext as any).durationPlausibilityWarnings).toEqual(expect.arrayContaining([
+    expect(forecast.calculationContext.criticalPath.networkProbability).toEqual(expect.objectContaining({
+      probabilityBasis: 'pert_analytic',
+      fallbackReasons: expect.arrayContaining(['insufficient_network_task_count']),
+    }))
+    expect((forecast.calculationContext as any).durationPlausibilityWarnings).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ ruleId: 'duration.band.order' }),
     ]))
   })
@@ -649,8 +768,8 @@ describe('projectRemainingDurationForecastService', () => {
         values: {
           ...row().values,
           title: `Parallel critical chain ${clientRowId}`,
-          forecast_finish_date: '2026-06-30',
-          forecast_p80_finish_date: '2026-07-04',
+          remaining_duration: availableProductionDayMetric(21),
+          probability_duration_metrics: availableProbabilityMetrics(17, 21, 25),
           is_critical: true,
           total_float_days: 0,
           free_float_days: 0,
@@ -674,17 +793,6 @@ describe('projectRemainingDurationForecastService', () => {
   })
 
   it('uses correlated network Monte Carlo when every active task has a probability distribution', () => {
-    const probabilityDuration = {
-      method: 'pert_from_existing_percentiles',
-      source: 'governed_task_percentiles',
-      p20RemainingDays: 8,
-      p50RemainingDays: 10,
-      p80RemainingDays: 15,
-      expectedRemainingDays: 11,
-      variance: 0.1,
-      standardDeviationDays: 2,
-      confidenceBandWidthDays: 7,
-    }
     const networkRow = (clientRowId: string, predecessorId?: string) => row({
       clientRowId,
       predecessorDependencies: predecessorId
@@ -699,7 +807,8 @@ describe('projectRemainingDurationForecastService', () => {
         total_float_days: 0,
         durationForecast: {
           remainingDurationDays: 10,
-          probabilityDuration,
+          remainingDuration: availableProductionDayMetric(10, { asOf: '2026-06-01' }),
+          probabilityDurationMetrics: availableProbabilityMetrics(8, 10, 15, { asOf: '2026-06-01' }),
         },
       },
     })
@@ -733,6 +842,68 @@ describe('projectRemainingDurationForecastService', () => {
     expect(forecast.forecastFinishDate).toBe(networkProbability.p80FinishDate)
   })
 
+  it('ignores legacy probability and band finishes when typed probability metrics are unavailable', () => {
+    const forecast = buildAvailableProjectRemainingDurationForecast({
+      rows: ['legacy-a', 'legacy-b'].map((clientRowId) => row({
+        clientRowId,
+        values: {
+          ...row().values,
+          project_id: 'project-legacy-probability',
+          planned_end_date: '2026-06-20',
+          remaining_duration: availableProductionDayMetric(5),
+          forecast_p20_finish_date: '2026-07-10',
+          forecast_p80_finish_date: '2026-08-10',
+          durationForecast: {
+            remainingDuration: availableProductionDayMetric(5),
+            probabilityDuration: {
+              p20RemainingDays: 30,
+              p50RemainingDays: 40,
+              p80RemainingDays: 60,
+            },
+            probabilityDurationMetrics: unavailableProbabilityMetrics(),
+          },
+        },
+      })),
+      asOfDate: '2026-06-10',
+    })
+
+    expect(forecast.forecastFinishDate).toBe('2026-06-14')
+    expect(forecast.calculationContext.criticalPath.networkProbability).toEqual(expect.objectContaining({
+      probabilityBasis: 'pert_analytic',
+      fallbackReasons: expect.arrayContaining(['incomplete_task_probability_distribution']),
+    }))
+  })
+
+  it.each([
+    ['wrong unit', { unit: 'calendar_day' }],
+    ['wrong calendar ref', { calendarRef: 'other_calendar' }],
+    ['wrong calendar version', { calendarVersion: 'calendar-v2' }],
+    ['wrong timezone', { timezone: 'UTC' }],
+    ['stale asOf', { asOf: '2026-06-09' }],
+  ])('rejects typed probability metrics with %s', (_label, override) => {
+    const forecast = buildAvailableProjectRemainingDurationForecast({
+      rows: ['probability-a', 'probability-b'].map((clientRowId) => row({
+        clientRowId,
+        values: {
+          ...row().values,
+          remaining_duration: availableProductionDayMetric(5),
+          probabilityDuration: {
+            p20RemainingDays: 30,
+            p50RemainingDays: 40,
+            p80RemainingDays: 60,
+          },
+          probabilityDurationMetrics: probabilityMetricsWithOverride(3, 5, 8, override),
+        },
+      })),
+      asOfDate: '2026-06-10',
+    })
+
+    expect(forecast.forecastFinishDate).toBe('2026-06-14')
+    expect(forecast.calculationContext.criticalPath.networkProbability).toEqual(expect.objectContaining({
+      fallbackReasons: expect.arrayContaining(['incomplete_task_probability_distribution']),
+    }))
+  })
+
   it('lets the confidence band govern when it is later than merge bias', () => {
     const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: ['chain-a', 'chain-b', 'chain-c'].map((clientRowId) => row({
@@ -740,8 +911,8 @@ describe('projectRemainingDurationForecastService', () => {
         values: {
           ...row().values,
           title: `Parallel critical chain ${clientRowId}`,
-          forecast_finish_date: '2026-06-30',
-          forecast_p80_finish_date: '2026-07-04',
+          remaining_duration: availableProductionDayMetric(21),
+          probability_duration_metrics: availableProbabilityMetrics(17, 21, 25),
           is_critical: true,
           total_float_days: 0,
           free_float_days: 0,
@@ -772,6 +943,7 @@ describe('projectRemainingDurationForecastService', () => {
           ...row().values,
           title: `Parallel critical chain ${clientRowId}`,
           forecast_finish_date: '2026-06-30',
+          remaining_duration: availableProductionDayMetric(21),
           is_critical: true,
           total_float_days: 0,
           free_float_days: 0,
@@ -801,6 +973,7 @@ describe('projectRemainingDurationForecastService', () => {
             ...row().values,
             planned_end_date: '2026-06-05',
             remaining_duration_days: 4,
+            remaining_duration: availableProductionDayMetric(4),
             is_critical: true,
             total_float_days: 0,
             free_float_days: 0,
@@ -826,6 +999,7 @@ describe('projectRemainingDurationForecastService', () => {
             ...row().values,
             planned_end_date: '2026-02-15',
             remaining_duration_days: 2,
+            remaining_duration: availableProductionDayMetric(2, { asOf: '2026-02-14' }),
             is_critical: true,
             total_float_days: 0,
             free_float_days: 0,
@@ -869,6 +1043,74 @@ describe('projectRemainingDurationForecastService', () => {
       availability: 'available',
     }))
     expect(forecast.calculationContext.criticalPath.latestCriticalFinishDate).toBe('2026-02-18')
+  })
+
+  it('derives typed probability band finishes on construction production days across shutdown windows', () => {
+    const forecast = buildAvailableProjectRemainingDurationForecast({
+      rows: [row({
+        values: {
+          ...row().values,
+          planned_end_date: '2026-02-18',
+          remaining_duration: availableProductionDayMetric(3, { asOf: '2026-02-14' }),
+          probability_duration_metrics: availableProbabilityMetrics(2, 3, 4, { asOf: '2026-02-14' }),
+          is_critical: true,
+          total_float_days: 0,
+          free_float_days: 0,
+        },
+      })],
+      asOfDate: '2026-02-14',
+      constructionCalendar: {
+        basis: 'official_construction_calendar_seed',
+        windows: [{
+          holidayCode: 'spring_festival_2026',
+          startDate: '2026-02-15',
+          endDate: '2026-02-17',
+          counts_as_construction_shutdown: true,
+        }],
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        availability: 'available',
+        unavailableReason: null,
+      },
+    })
+
+    expect(forecast.calculationContext.criticalPath).toEqual(expect.objectContaining({
+      optimisticBandFinishDate: '2026-02-18',
+      latestCriticalFinishDate: '2026-02-19',
+      confidenceBandFinishDate: '2026-02-20',
+    }))
+    expect(forecast.forecastFinishDate).toBe('2026-02-20')
+  })
+
+  it('derives the internal forecast finish from the matching typed duration instead of a contradictory raw finish', () => {
+    const forecast = buildAvailableProjectRemainingDurationForecast({
+      rows: [row({
+        values: {
+          ...row().values,
+          planned_end_date: '2026-02-18',
+          forecast_finish_date: '2026-03-30',
+          remaining_duration: availableProductionDayMetric(2, { asOf: '2026-02-14' }),
+        },
+      })],
+      asOfDate: '2026-02-14',
+      constructionCalendar: {
+        basis: 'official_construction_calendar_seed',
+        windows: [{
+          holidayCode: 'spring_festival_2026',
+          startDate: '2026-02-15',
+          endDate: '2026-02-17',
+          counts_as_construction_shutdown: true,
+        }],
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        availability: 'available',
+        unavailableReason: null,
+      },
+    })
+
+    expect(forecast.forecastFinishDate).toBe('2026-02-18')
   })
 
   it('fails the derived finish and target gap closed when production calendar identity is missing', () => {
@@ -983,6 +1225,144 @@ describe('projectRemainingDurationForecastService', () => {
         parallelWaitCount: 1,
         finishGateCount: 0,
       }),
+    }))
+  })
+
+  it('serializes governed finish-gate remaining after the internal work finishes', () => {
+    const forecast = buildAvailableProjectRemainingDurationForecast({
+      rows: [
+        row({
+          clientRowId: 'internal-work',
+          values: {
+            ...row().values,
+            planned_end_date: '2026-06-20',
+            is_critical: true,
+            total_float_days: 0,
+            free_float_days: 0,
+          },
+        }),
+        row({
+          clientRowId: 'finish-gate',
+          values: {
+            title: 'Completion acceptance gate',
+            planned_start_date: '2026-06-11',
+            planned_end_date: '2026-06-12',
+            remaining_duration: availableProductionDayMetric(3),
+            progress: 0,
+            status: 'todo',
+            duration_contribution_mode: 'quality_gate',
+            standard_task_metadata: {
+              gateRelation: 'finish_gate',
+              acceptanceRequired: true,
+            },
+          },
+        }),
+      ],
+      asOfDate: '2026-06-10',
+    })
+
+    expect(forecast.forecastFinishDate).toBe('2026-06-22')
+    expect(forecast.calculationContext.externalInterfaces).toEqual(expect.objectContaining({
+      latestGateFinishDate: '2026-06-22',
+      finishGateFinishDate: '2026-06-22',
+      serializedGateFinishDate: '2026-06-22',
+    }))
+  })
+
+  it('serializes governed handover remaining after the finish-gate base', () => {
+    const forecast = buildAvailableProjectRemainingDurationForecast({
+      rows: [
+        row({
+          clientRowId: 'internal-work',
+          values: {
+            ...row().values,
+            planned_end_date: '2026-06-20',
+            is_critical: true,
+            total_float_days: 0,
+            free_float_days: 0,
+          },
+        }),
+        row({
+          clientRowId: 'finish-gate',
+          values: {
+            title: 'Completion acceptance gate',
+            planned_end_date: '2026-06-12',
+            remaining_duration: availableProductionDayMetric(3),
+            progress: 0,
+            status: 'todo',
+            duration_contribution_mode: 'quality_gate',
+            standard_task_metadata: {
+              gateRelation: 'finish_gate',
+              acceptanceRequired: true,
+            },
+          },
+        }),
+        row({
+          clientRowId: 'handover-gate',
+          values: {
+            title: 'Owner handover gate',
+            planned_end_date: '2026-06-12',
+            remaining_duration: availableProductionDayMetric(2),
+            progress: 0,
+            status: 'todo',
+            duration_contribution_mode: 'quality_gate',
+            standard_task_metadata: {
+              gateRelation: 'handover_gate',
+              acceptanceRequired: true,
+            },
+          },
+        }),
+      ],
+      asOfDate: '2026-06-10',
+    })
+
+    expect(forecast.forecastFinishDate).toBe('2026-06-23')
+    expect(forecast.calculationContext.externalInterfaces).toEqual(expect.objectContaining({
+      latestGateFinishDate: '2026-06-23',
+      finishGateFinishDate: '2026-06-22',
+      handoverGateFinishDate: '2026-06-23',
+      serializedGateFinishDate: '2026-06-23',
+    }))
+  })
+
+  it('does not let an ungoverned external forecast finish override the planned gate fact', () => {
+    const forecast = buildAvailableProjectRemainingDurationForecast({
+      rows: [
+        row({
+          clientRowId: 'internal-critical',
+          values: {
+            ...row().values,
+            planned_end_date: '2026-06-15',
+            remaining_duration: availableProductionDayMetric(4),
+            is_critical: true,
+            total_float_days: 0,
+            free_float_days: 0,
+          },
+        }),
+        row({
+          clientRowId: 'external-finish-gate',
+          values: {
+            title: 'External acceptance gate',
+            planned_start_date: '2026-06-12',
+            planned_end_date: '2026-06-18',
+            forecast_finish_date: '2026-08-31',
+            remaining_duration: productionDayMetric(null),
+            progress: 0,
+            status: 'todo',
+            duration_contribution_mode: 'quality_gate',
+            standard_task_metadata: {
+              gateRelation: 'acceptance_gate',
+              qualityControlRole: 'acceptance_gate',
+            },
+          },
+        }),
+      ],
+      asOfDate: '2026-06-10',
+    })
+
+    expect(forecast.forecastFinishDate).toBe('2026-06-18')
+    expect(forecast.calculationContext.externalInterfaces).toEqual(expect.objectContaining({
+      latestGateFinishDate: '2026-06-18',
     }))
   })
 
@@ -1165,6 +1545,7 @@ describe('projectRemainingDurationForecastService', () => {
             progress: 0,
             status: 'todo',
             remaining_duration_days: 5,
+            remaining_duration: availableProductionDayMetric(5),
             duration_contribution_mode: 'external_wait',
             standard_task_metadata: {
               constraintType: 'external_interface_wait',
@@ -1181,6 +1562,7 @@ describe('projectRemainingDurationForecastService', () => {
             progress: 0,
             status: 'todo',
             remaining_duration_days: 7,
+            remaining_duration: availableProductionDayMetric(7),
             duration_contribution_mode: 'external_wait',
             standard_task_metadata: {
               constraintType: 'external_interface_wait',
@@ -1262,6 +1644,7 @@ describe('projectRemainingDurationForecastService', () => {
             progress: 0,
             status: 'todo',
             remaining_duration_days: 3,
+            remaining_duration: availableProductionDayMetric(3),
             duration_contribution_mode: 'quality_gate',
             standard_task_metadata: {
               gateRelation: 'acceptance_gate',
@@ -1277,6 +1660,7 @@ describe('projectRemainingDurationForecastService', () => {
             progress: 0,
             status: 'todo',
             remaining_duration_days: 2,
+            remaining_duration: availableProductionDayMetric(2),
             duration_contribution_mode: 'handover_marker',
             standard_task_metadata: {
               documentEvidenceRole: 'handover_document',
@@ -1344,6 +1728,7 @@ describe('projectRemainingDurationForecastService', () => {
             project_id: 'project-1',
             planned_end_date: '2026-06-20',
             forecast_finish_date: '2026-06-22',
+            remaining_duration: availableProductionDayMetric(13),
             total_float_days: 0,
           },
         }),

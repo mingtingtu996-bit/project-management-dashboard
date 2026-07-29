@@ -1,5 +1,6 @@
 import { executeSQL, getTasks } from './dbService.js'
 import {
+  applyCriticalPathSnapshotToAccelerationRows,
   evaluateRuntimeDelayRecoveryWithCriticalPath,
   type ScheduleAccelerationContext,
   type ScheduleAccelerationDependency,
@@ -19,7 +20,11 @@ import { getProjectCriticalPathSnapshot } from './projectCriticalPathService.js'
 import { listCurrentTaskDurationForecasts } from './taskDurationForecastService.js'
 import { getTaskDurationSuggestion } from './durationSuggestionService.js'
 import { buildRuntimeExecutionInference } from './runtimeExecutionInferenceService.js'
-import { resolveConstructionCalendarContext, type ConstructionCalendarContext } from './constructionCalendar.js'
+import {
+  isAuthoritativeConstructionCalendar,
+  resolveConstructionCalendarContext,
+  type ConstructionCalendarContext,
+} from './constructionCalendar.js'
 import {
   backtestEarliestPendingDurationAccuracyPrediction,
   recordDurationAccuracyPrediction,
@@ -41,7 +46,7 @@ import type {
 import type { Task, TaskDependency } from '../types/db.js'
 import { logger } from '../middleware/logger.js'
 import { normalizeDateOnlyText, signedDurationDayDelta } from '../utils/durationDays.js'
-import { businessDateKey } from './durationMetricService.js'
+import { businessDateKey, normalizeDurationMetricDto } from './durationMetricService.js'
 import {
   mergeConstructionOrganizationLineageIntoContext,
   readConstructionOrganizationPlanNetworkRuntimeLineage,
@@ -417,15 +422,6 @@ function latestDate(dates: Array<string | null | undefined>) {
     .filter((date): date is string => Boolean(date))
     .sort()
     .at(-1) ?? null
-}
-
-function addInclusiveRemainingDays(anchorDate: string | null | undefined, days: number | null | undefined) {
-  const anchor = normalizeDate(anchorDate)
-  const normalizedDays = Math.max(0, Math.ceil(Number(days ?? 0)))
-  if (!anchor || normalizedDays <= 0) return anchor
-  const next = new Date(`${anchor}T00:00:00.000Z`)
-  next.setUTCDate(next.getUTCDate() + normalizedDays - 1)
-  return next.toISOString().slice(0, 10)
 }
 
 function earliestDate(dates: Array<string | null | undefined>) {
@@ -1364,9 +1360,12 @@ async function buildRuntimeForecastInputs(projectId: string, context?: ScheduleA
     resolveRuntimeScheduleAccelerationContext(projectId, context),
     context,
   )
+  const constructionCalendar = await resolveRuntimeConstructionCalendar(projectId, accelerationContext)
+  const durationAsOfDate = normalizeDate(asOfDate)
+    ?? businessDateKey(new Date(), constructionCalendar?.timezone)
   const hydrated = await withRuntimeOptionalRead(
     'runtime_engine_signals',
-    hydrateRuntimeRowsWithEngineSignals(projectId, rows, asOfDate),
+    hydrateRuntimeRowsWithEngineSignals(projectId, rows, constructionCalendar, durationAsOfDate),
     {
       rows,
       criticalPathSnapshot: null as Awaited<ReturnType<typeof getProjectCriticalPathSnapshot>> | null,
@@ -1400,7 +1399,6 @@ async function buildRuntimeForecastInputs(projectId: string, context?: ScheduleA
     loadRuntimeMonthlyCommitmentSummary(projectId),
     {},
   )
-  const constructionCalendar = await resolveRuntimeConstructionCalendar(projectId, accelerationContext)
   return {
     rows: hydrated.rows,
     criticalPathSnapshot: hydrated.criticalPathSnapshot,
@@ -1408,6 +1406,7 @@ async function buildRuntimeForecastInputs(projectId: string, context?: ScheduleA
     mergedRuntimeContext,
     monthlyCommitments,
     accelerationContext,
+    durationAsOfDate,
   }
 }
 
@@ -1438,30 +1437,65 @@ function isRuntimeDurationBearingRow(row: ScheduleAccelerationRow) {
   return (!mode || mode === 'schedule_row') && contributionMode === 'duration_bearing'
 }
 
-function hasRuntimeRemainingForecastEvidence(rows: ScheduleAccelerationRow[]) {
+function hasMatchingRuntimeRemainingDuration(
+  value: unknown,
+  asOfDate: string,
+  calendar?: ConstructionCalendarContext | null,
+) {
+  if (!isAuthoritativeConstructionCalendar(calendar)) return false
+  const metric = normalizeDurationMetricDto(value)
+  const durationValue = Number(metric?.value)
+  return Boolean(
+    metric
+      && metric.availability === 'available'
+      && metric.unit === 'construction_production_day'
+      && metric.calendarRef === calendar.calendarRef
+      && metric.calendarVersion === calendar.calendarVersion
+      && metric.timezone === calendar.timezone
+      && metric.asOf === asOfDate
+      && Number.isFinite(durationValue)
+      && durationValue > 0,
+  )
+}
+
+function hasRuntimeRemainingForecastEvidence(
+  rows: ScheduleAccelerationRow[],
+  asOfDate: string,
+  calendar?: ConstructionCalendarContext | null,
+) {
   return rows.some((row) => {
     const mode = normalizeText(row.rowProjectionMode ?? row.values.row_projection_mode)
     if (mode && mode !== 'schedule_row') return false
     const values = row.values
     return Boolean(
-      normalizeDate(values.forecast_finish_date)
-        ?? normalizeDate(values.planned_end_date ?? values.end_date)
+      normalizeDate(values.planned_end_date ?? values.end_date)
         ?? normalizeDate(values.actual_end_date)
-        ?? (readOptionalNumber(values.remaining_duration_days) != null ? 'remaining_duration_days' : null)
-        ?? (readOptionalNumber(values.critical_path_span_days) != null ? 'critical_path_span_days' : null),
+        ?? (hasMatchingRuntimeRemainingDuration(
+          values.remaining_duration ?? values.remainingDuration,
+          asOfDate,
+          calendar,
+        ) ? 'remaining_duration' : null),
     )
   })
 }
 
-function assertRuntimeRemainingForecastEvidence(rows: ScheduleAccelerationRow[]) {
-  if (hasRuntimeRemainingForecastEvidence(rows)) return
+function assertRuntimeRemainingForecastEvidence(
+  rows: ScheduleAccelerationRow[],
+  asOfDate: string,
+  calendar?: ConstructionCalendarContext | null,
+) {
+  if (hasRuntimeRemainingForecastEvidence(rows, asOfDate, calendar)) return
   throw new ProjectRemainingForecastUnavailableError(
     'runtime remaining forecast evidence unavailable',
     'runtime_remaining_forecast_evidence',
   )
 }
 
-async function loadRuntimeDurationSuggestion(projectId: string, row: ScheduleAccelerationRow) {
+async function loadRuntimeDurationSuggestion(
+  projectId: string,
+  row: ScheduleAccelerationRow,
+  workCalendar?: ConstructionCalendarContext | null,
+) {
   if (!isRuntimeDurationBearingRow(row)) return null
   const taskId = normalizeText(row.clientRowId)
   if (!taskId) return null
@@ -1481,6 +1515,7 @@ async function loadRuntimeDurationSuggestion(projectId: string, row: ScheduleAcc
         actualEndDate: normalizeDate(row.values.actual_end_date),
         progress: readOptionalNumber(row.values.progress),
         suggestionPurpose: 'execution_reference',
+        workCalendar,
       }),
       readPositiveIntegerEnv(
         'SCHEDULE_ACCELERATION_RUNTIME_SUGGESTION_TIMEOUT_MS',
@@ -1497,7 +1532,12 @@ async function loadRuntimeDurationSuggestion(projectId: string, row: ScheduleAcc
   }
 }
 
-async function hydrateRuntimeRowsWithEngineSignals(projectId: string, rows: ScheduleAccelerationRow[], asOfDate?: string | null) {
+async function hydrateRuntimeRowsWithEngineSignals(
+  projectId: string,
+  rows: ScheduleAccelerationRow[],
+  workCalendar?: ConstructionCalendarContext | null,
+  asOfDate?: string | null,
+) {
   const taskIds = rows.map((row) => normalizeText(row.clientRowId)).filter(Boolean)
   if (taskIds.length === 0) {
     return {
@@ -1521,7 +1561,7 @@ async function hydrateRuntimeRowsWithEngineSignals(projectId: string, rows: Sche
   const forecastByTaskId = new Map(forecasts.map((forecast) => [normalizeText(forecast.taskId), forecast]))
   const suggestionResults = await Promise.allSettled(rows.map(async (row) => ({
     taskId: normalizeText(row.clientRowId),
-    suggestion: await loadRuntimeDurationSuggestion(projectId, row),
+    suggestion: await loadRuntimeDurationSuggestion(projectId, row, workCalendar),
   })))
   const suggestionByTaskId = new Map<string, unknown>()
   for (const result of suggestionResults) {
@@ -1529,44 +1569,26 @@ async function hydrateRuntimeRowsWithEngineSignals(projectId: string, rows: Sche
     if (!result.value.taskId || !result.value.suggestion) continue
     suggestionByTaskId.set(result.value.taskId, result.value.suggestion)
   }
-  const criticalTaskIds = new Set([
-    ...(criticalPath?.displayTaskIds ?? []),
-    ...(criticalPath?.autoTaskIds ?? []),
-  ].map(normalizeText).filter(Boolean))
-  const criticalTaskById = new Map((criticalPath?.tasks ?? []).map((task) => [normalizeText(task.taskId), task]))
-  const primaryChainTaskIds = new Set((criticalPath?.primaryChain?.taskIds ?? []).map(normalizeText).filter(Boolean))
-  const primaryChainSpanDays = readOptionalNumber(criticalPath?.primaryChain?.totalDurationDays)
-  const hasCriticalPathProjection = criticalTaskIds.size > 0 || criticalTaskById.size > 0
-
-  const hydratedRows = rows.map((row) => {
+  const rowsWithForecastSignals = rows.map((row) => {
     const taskId = normalizeText(row.clientRowId)
     const forecast = forecastByTaskId.get(taskId)
     const suggestion = suggestionByTaskId.get(taskId)
-    const criticalTask = criticalTaskById.get(taskId)
-    const p20RemainingDays = readOptionalNumber(forecast?.probabilityDuration?.p20RemainingDays)
-    const p80RemainingDays = readOptionalNumber(forecast?.probabilityDuration?.p80RemainingDays)
     const values: ScheduleAccelerationRow['values'] = {
       ...row.values,
-      ...(forecast?.forecastFinishDate ? { forecast_finish_date: forecast.forecastFinishDate } : {}),
-      ...(forecast?.remainingDurationDays != null ? { remaining_duration_days: forecast.remainingDurationDays } : {}),
-      ...(p20RemainingDays != null ? { forecast_p20_finish_date: addInclusiveRemainingDays(asOfDate, p20RemainingDays) } : {}),
-      ...(p80RemainingDays != null ? { forecast_p80_finish_date: addInclusiveRemainingDays(asOfDate, p80RemainingDays) } : {}),
-      ...(primaryChainTaskIds.has(taskId) && primaryChainSpanDays != null && primaryChainSpanDays > 0
-        ? { critical_path_span_days: primaryChainSpanDays }
+      ...(forecast?.remainingDuration ? { remaining_duration: forecast.remainingDuration } : {}),
+      ...(forecast?.probabilityDurationMetrics
+        ? { probability_duration_metrics: forecast.probabilityDurationMetrics }
         : {}),
       ...(suggestion ? { duration_suggestion: suggestion } : {}),
-    }
-    if (hasCriticalPathProjection) {
-      values.is_critical = criticalTaskIds.has(taskId)
-      if (criticalTask?.floatDays != null) {
-        values.total_float_days = criticalTask.floatDays
-        if (criticalTaskIds.has(taskId)) values.free_float_days = 0
-      }
     }
     return {
       ...row,
       values,
     }
+  })
+  const hydratedRows = applyCriticalPathSnapshotToAccelerationRows(rowsWithForecastSignals, criticalPath, {
+    constructionCalendar: workCalendar,
+    asOfDate,
   })
 
   return {
@@ -1900,8 +1922,9 @@ export async function evaluateRuntimeScheduleAcceleration(params: {
     mergedRuntimeContext,
     monthlyCommitments,
     accelerationContext,
+    durationAsOfDate,
   } = await buildRuntimeForecastInputs(params.projectId, params.context, params.asOfDate)
-  assertRuntimeRemainingForecastEvidence(rows)
+  assertRuntimeRemainingForecastEvidence(rows, durationAsOfDate, constructionCalendar)
   const targetEndDate = await resolveRuntimeTargetEndDate(params.projectId, params.targetEndDate)
   const constructionOrganizationLineage = readConstructionOrganizationPlanNetworkRuntimeLineage(
     {
@@ -1916,7 +1939,7 @@ export async function evaluateRuntimeScheduleAcceleration(params: {
   )
   const projectRemainingForecast = buildProjectRemainingDurationForecast({
     rows,
-    asOfDate: params.asOfDate,
+    asOfDate: durationAsOfDate,
     targetEndDate,
     criticalPathSnapshot,
     constructionCalendar,
@@ -1937,7 +1960,7 @@ export async function evaluateRuntimeScheduleAcceleration(params: {
         context: {
           ...accelerationContext,
           constructionCalendar,
-          asOfDate: normalizeDate(params.asOfDate),
+          asOfDate: durationAsOfDate,
           runtime: {
             ...mergedRuntimeContext,
             projectRemainingForecastFinishDate: projectRemainingForecast.forecastFinishDate,
@@ -1947,6 +1970,7 @@ export async function evaluateRuntimeScheduleAcceleration(params: {
         runtimeArtifactPublications: params.runtimeArtifactPublications,
         runtimeConsumerObservedAt: params.runtimeConsumerObservedAt,
         runtimeConsumerErrorHandler: params.runtimeConsumerErrorHandler,
+        criticalPathSnapshot,
       })
     : undefined
   if (targetFeasibility?.accelerationProposal && normalizeText(params.issuedBy)) {
@@ -2063,14 +2087,15 @@ async function computeRuntimeProjectRemainingDurationForecast(params: {
     rows,
     criticalPathSnapshot,
     constructionCalendar,
+    durationAsOfDate,
     mergedRuntimeContext,
     monthlyCommitments,
   } = await buildRuntimeForecastInputs(params.projectId, params.context, params.asOfDate)
-  assertRuntimeRemainingForecastEvidence(rows)
+  assertRuntimeRemainingForecastEvidence(rows, durationAsOfDate, constructionCalendar)
   const targetEndDate = await resolveRuntimeTargetEndDate(params.projectId, params.targetEndDate)
   const projectRemainingForecast = buildProjectRemainingDurationForecast({
     rows,
-    asOfDate: params.asOfDate,
+    asOfDate: durationAsOfDate,
     targetEndDate,
     criticalPathSnapshot,
     constructionCalendar,
@@ -2084,7 +2109,7 @@ async function computeRuntimeProjectRemainingDurationForecast(params: {
     rows,
     forecast: projectRemainingForecast,
     constructionCalendar,
-    asOfDate: params.asOfDate,
+    asOfDate: durationAsOfDate,
   })
   return {
     rowsEvaluated: rows.length,

@@ -62,6 +62,7 @@ import {
   addConstructionProductionDays,
   effectiveConstructionCalendarBasis,
   effectiveConstructionCalendarWindowCount,
+  isAuthoritativeConstructionCalendar,
   isConstructionProductionDay,
   productionDaysBetweenInclusive,
   resolveConstructionCalendarContext,
@@ -77,6 +78,7 @@ import {
   buildCalendarDayDurationMetric,
   businessDateKey,
   DEFAULT_DURATION_TIMEZONE,
+  normalizeDurationMetricDto,
   type DurationMetricDto,
 } from './durationMetricService.js'
 import { isActiveWarning } from '../utils/warningStatus.js'
@@ -289,16 +291,25 @@ type BaselineDurationSuggestion = {
   contextualReferenceDays?: number | string | null
   planReferenceDays?: number | string | null
   remainingForecastDays?: number | string | null
+  remainingDuration?: DurationMetricDto | null
   durationOutputCode?: string | null
   confidenceLevel?: string | null
   durationCalibrationSource?: string | null
   durationProvenance?: string | null
 }
 
+type BaselineDurationSuggestionMetrics = {
+  missingPlanDateCount: number
+  suggestedDurationCount: number
+  unavailableDurationSuggestionCount: number
+}
+
 type BaselineGenerationDateOptions = {
   forecastByTaskId?: Map<string, CachedDurationForecastRow>
   durationSuggestionByTaskId?: Map<string, BaselineDurationSuggestion>
+  durationSuggestionMetrics?: BaselineDurationSuggestionMetrics
   constructionCalendar?: ConstructionCalendarContext | null
+  durationAsOfDate?: string | null
   planningReplayReadbackByTaskId?: Map<string, PlanningReplayCalibrationReadback>
 }
 
@@ -439,11 +450,6 @@ function subtractConstructionProductionDaysFromText(
   return cursor.toISOString().slice(0, 10)
 }
 
-function readPositiveCeil(value: unknown) {
-  const parsed = Number(value)
-  return Number.isFinite(parsed) && parsed > 0 ? Math.ceil(parsed) : null
-}
-
 function isCompletedBaselineTask(task: Pick<TaskBaselineTaskRow, 'status' | 'progress'> & {
   actual_end_date?: string | null
 }) {
@@ -466,9 +472,35 @@ function isInProgressBaselineTask(task: Pick<TaskBaselineTaskRow, 'status' | 'pr
     || (Number.isFinite(progress) && progress > 0 && progress < 100)
 }
 
-function readDurationSuggestionDaysForGeneration(suggestion: BaselineDurationSuggestion | undefined) {
-  if (!suggestion) return null
-  return readGovernedDurationSuggestionDays(suggestion) ?? readPositiveCeil(suggestion.recommendedDurationDays)
+function readDurationSuggestionDaysForGeneration(
+  suggestion: BaselineDurationSuggestion | undefined,
+  calendar: ConstructionCalendarContext | null | undefined,
+  asOfDate: string | null | undefined,
+) {
+  if (!suggestion || !isAuthoritativeConstructionCalendar(calendar)) return null
+  return readGovernedDurationSuggestionDays(suggestion, calendar, asOfDate)
+}
+
+function readAuthoritativeForecastFinishDate(
+  forecast: CachedDurationForecastRow | undefined,
+  calendar: ConstructionCalendarContext | null | undefined,
+  asOfDate: string | null | undefined,
+) {
+  if (!forecast || forecast.is_current !== true || !isAuthoritativeConstructionCalendar(calendar)) return null
+  const remainingDuration = normalizeDurationMetricDto(readRecord(forecast.metadata).remainingDuration)
+  const expectedAsOf = normalizeDateOnlyText(asOfDate)
+  if (
+    !remainingDuration
+    || remainingDuration.availability !== 'available'
+    || remainingDuration.unit !== 'construction_production_day'
+    || remainingDuration.value === null
+    || remainingDuration.value < 0
+    || remainingDuration.calendarRef !== calendar.calendarRef
+    || remainingDuration.calendarVersion !== calendar.calendarVersion
+    || remainingDuration.timezone !== calendar.timezone
+    || remainingDuration.asOf !== expectedAsOf
+  ) return null
+  return normalizeBaselineDate(forecast.forecast_finish_date ?? null)
 }
 
 type ResolvedBaselineDraftDates = {
@@ -528,7 +560,11 @@ function resolveBaselineDraftDates(
     }
 
     const forecast = options.forecastByTaskId?.get(task.id)
-    const forecastFinish = normalizeBaselineDate(forecast?.forecast_finish_date ?? null)
+    const forecastFinish = readAuthoritativeForecastFinishDate(
+      forecast,
+      options.constructionCalendar,
+      options.durationAsOfDate,
+    )
     const forecastExtendsPlan = forecastFinish && (!plannedEndDate || (compareBaselineDate(forecastFinish, plannedEndDate) ?? 0) > 0)
     if (forecastExtendsPlan) {
       plannedEndDate = forecastFinish
@@ -544,7 +580,11 @@ function resolveBaselineDraftDates(
 
   if (!plannedStartDate || !plannedEndDate) {
     const suggestion = options.durationSuggestionByTaskId?.get(task.id)
-    const suggestedDays = readDurationSuggestionDaysForGeneration(suggestion)
+    const suggestedDays = readDurationSuggestionDaysForGeneration(
+      suggestion,
+      options.constructionCalendar,
+      options.durationAsOfDate,
+    )
     if (suggestedDays != null) {
       if (plannedStartDate && !plannedEndDate) {
         plannedEndDate = addConstructionProductionDaysFromText(plannedStartDate, suggestedDays, options.constructionCalendar)
@@ -1780,6 +1820,10 @@ type CachedDurationForecastRow = {
   duration_calibration_source?: string | null
   duration_provenance?: string | null
   factor_summary?: unknown
+  metadata?: unknown
+  generated_at?: string | null
+  created_at?: string | null
+  is_current?: boolean | null
 }
 
 type ExternalRiskRow = Record<string, any> & {
@@ -1855,18 +1899,18 @@ async function loadLatestForecastsByTaskId(taskRows: TaskBaselineTaskRow[]) {
   try {
     const { data, error } = await supabase
       .from('task_duration_forecasts')
-      .select('task_id, forecast_delay_days, forecast_finish_date, remaining_duration_days, confidence_level, duration_calibration_source, duration_provenance, factor_summary, generated_at, created_at, is_current')
+      .select('task_id, forecast_delay_days, forecast_finish_date, remaining_duration_days, confidence_level, duration_calibration_source, duration_provenance, factor_summary, metadata, generated_at, created_at, is_current')
+      .eq('is_current', true)
       .in('task_id', executableTaskIds)
-      .order('is_current', { ascending: false })
       .order('generated_at', { ascending: false })
       .order('created_at', { ascending: false })
-      .limit(executableTaskIds.length * 3)
+      .limit(executableTaskIds.length)
     if (error) throw error
 
     const latestByTaskId = new Map<string, CachedDurationForecastRow>()
     for (const row of (data ?? []) as CachedDurationForecastRow[]) {
       const taskId = normalizeText(row.task_id)
-      if (taskId && !latestByTaskId.has(taskId)) {
+      if (taskId && row.is_current === true && !latestByTaskId.has(taskId)) {
         latestByTaskId.set(taskId, row)
       }
     }
@@ -2027,23 +2071,43 @@ function readStringArray(value: unknown): string[] {
   }
 }
 
-function readGovernedDurationSuggestionDays(suggestion: unknown) {
+function readGovernedDurationSuggestionDays(
+  suggestion: unknown,
+  calendar?: ConstructionCalendarContext | null,
+  expectedAsOfDate?: string | null,
+) {
   const record = readRecord(suggestion)
   const outputCode = normalizeText(record.durationOutputCode)
-  const value = outputCode === 'contextual_reference'
-    ? record.contextualReferenceDays
-    : outputCode === 'plan_reference'
-      ? record.planReferenceDays
-      : outputCode === 'remaining_forecast'
-        ? record.remainingForecastDays
-        : null
+  let value: unknown = null
+  if (outputCode === 'contextual_reference') {
+    value = record.contextualReferenceDays
+  } else if (outputCode === 'plan_reference') {
+    value = record.planReferenceDays
+  } else if (outputCode === 'remaining_forecast') {
+    const metric = normalizeDurationMetricDto(record.remainingDuration)
+    if (
+      !metric
+      || metric.availability !== 'available'
+      || metric.unit !== 'construction_production_day'
+      || !isAuthoritativeConstructionCalendar(calendar)
+      || metric.calendarRef !== calendar.calendarRef
+      || metric.calendarVersion !== calendar.calendarVersion
+      || metric.timezone !== calendar.timezone
+      || metric.asOf !== normalizeDateOnlyText(expectedAsOfDate)
+    ) return null
+    value = metric.value
+  }
   const parsed = Number(value)
   return Number.isFinite(parsed) && parsed > 0 ? Math.ceil(parsed) : null
 }
 
 async function loadMissingDateDurationSuggestions(
   taskRows: TaskBaselineTaskRow[],
-  options?: { runtimeEvidenceMode?: 'record' | 'no_write' },
+  options?: {
+    runtimeEvidenceMode?: 'record' | 'no_write'
+    constructionCalendar?: ConstructionCalendarContext | null
+    durationAsOfDate?: string | null
+  },
 ) {
   const missingDateTasks = taskRows
     .filter((task) => task.is_executable !== false && task.is_wbs_summary !== true && !isClosedExecutionTask(task))
@@ -2073,6 +2137,7 @@ async function loadMissingDateDurationSuggestions(
     zoneObjectId: task.physical_zone_object_id ?? task.functional_area_object_id,
     plannedStartDate: taskPlanStartDate(task),
     plannedEndDate: taskPlanEndDate(task),
+    workCalendar: options?.constructionCalendar,
     progress: task.progress,
     responsibleUnitId: task.participant_unit_id,
     acceptanceRequired: task.acceptance_required,
@@ -2083,7 +2148,11 @@ async function loadMissingDateDurationSuggestions(
   const durationSuggestionByTaskId = new Map<string, BaselineDurationSuggestion>()
   const metrics = results.reduce((summary, result, index) => {
     const task = missingDateTasks[index]
-    if (result.status === 'fulfilled' && readGovernedDurationSuggestionDays(result.value) != null) {
+    if (result.status === 'fulfilled' && readGovernedDurationSuggestionDays(
+      result.value,
+      options?.constructionCalendar,
+      options?.durationAsOfDate,
+    ) != null) {
       summary.suggestedDurationCount += 1
       durationSuggestionByTaskId.set(task.id, result.value as BaselineDurationSuggestion)
       if (['low', 'unavailable'].includes(result.value.confidenceLevel)) {
@@ -2105,8 +2174,15 @@ async function loadMissingDateDurationSuggestions(
   }
 }
 
-async function getMissingDateDurationSuggestionMetrics(taskRows: TaskBaselineTaskRow[]) {
-  return (await loadMissingDateDurationSuggestions(taskRows)).metrics
+async function getMissingDateDurationSuggestionMetrics(
+  taskRows: TaskBaselineTaskRow[],
+  options: BaselineGenerationDateOptions = {},
+) {
+  if (options.durationSuggestionMetrics) return options.durationSuggestionMetrics
+  return (await loadMissingDateDurationSuggestions(taskRows, {
+    constructionCalendar: options.constructionCalendar,
+    durationAsOfDate: options.durationAsOfDate,
+  })).metrics
 }
 
 async function getHealthRiskMetrics(projectId: string) {
@@ -2208,6 +2284,7 @@ async function getProjectFactMetrics(
   projectId: string,
   taskRows: TaskBaselineTaskRow[],
   criticalTaskIds: Set<string> = new Set(),
+  dateOptions: BaselineGenerationDateOptions = {},
 ): Promise<BaselineProjectFactMetrics> {
   const taskIds = new Set(taskRows.map((task) => task.id).filter(Boolean))
   if (!projectId || taskIds.size === 0) return { ...EMPTY_PROJECT_FACT_METRICS }
@@ -2238,7 +2315,7 @@ async function getProjectFactMetrics(
     safeSelectProjectRows('issues', projectId) as Promise<ExternalIssueRow[]>,
     listProjectWarningProjectionRows(projectId),
     safeSelectProjectRows('monthly_plan_items', projectId),
-    getMissingDateDurationSuggestionMetrics(taskRows),
+    getMissingDateDurationSuggestionMetrics(taskRows, dateOptions),
     getHealthRiskMetrics(projectId),
   ])
 
@@ -2335,6 +2412,8 @@ export async function buildBaselineGenerationCandidateV1474(params: {
   criticalTaskIds?: Set<string>
   asOf?: string
   timezone?: string | null
+  constructionCalendar?: ConstructionCalendarContext | null
+  durationSuggestionMetrics?: BaselineDurationSuggestionMetrics
 }): Promise<BaselineGenerationCandidate> {
   const diffItems = buildBaselineDiffItems(params.sourceItems, params.candidateItems)
   const diffCounts = buildBaselineDiffCounts(diffItems)
@@ -2352,7 +2431,16 @@ export async function buildBaselineGenerationCandidateV1474(params: {
   )
   const totalFinishShiftValue = totalFinishShiftDelta === null ? null : Math.abs(totalFinishShiftDelta)
   const milestoneMaxShiftValue = getBaselineMilestoneMaxShiftDays(params.sourceItems, params.candidateItems)
-  const timezone = String(params.timezone ?? '').trim() || DEFAULT_DURATION_TIMEZONE
+  const constructionCalendar = params.constructionCalendar !== undefined
+    ? params.constructionCalendar
+    : await resolveConstructionCalendarContext({
+        projectId: params.baseline.project_id,
+        onError: (error) => logger.warn('[baselineGenerationService] failed to resolve construction calendar context for candidate', {
+          projectId: params.baseline.project_id,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      })
+  const timezone = String(params.timezone ?? constructionCalendar?.timezone ?? '').trim() || DEFAULT_DURATION_TIMEZONE
   const asOf = params.asOf === undefined ? businessDateKey(new Date(), timezone) : params.asOf
   const totalFinishShift = buildCalendarDayDurationMetric(totalFinishShiftValue, { asOf, timezone })
   const milestoneMaxShift = buildCalendarDayDurationMetric(milestoneMaxShiftValue, { asOf, timezone })
@@ -2365,7 +2453,11 @@ export async function buildBaselineGenerationCandidateV1474(params: {
   const [forecastMetrics, directSeedMetrics, projectFactMetrics, buildingPatternExecutionProfile] = await Promise.all([
     getForecastMetrics(params.taskRows),
     getDirectSeedMetrics(params.taskRows),
-    getProjectFactMetrics(params.baseline.project_id, params.taskRows, criticalTaskIds),
+    getProjectFactMetrics(params.baseline.project_id, params.taskRows, criticalTaskIds, {
+      durationSuggestionMetrics: params.durationSuggestionMetrics,
+      constructionCalendar,
+      durationAsOfDate: asOf,
+    }),
     buildBuildingPatternExecutionProfile(params.baseline.project_id, params.taskRows, 'task_facts'),
   ])
   const constructionRhythmExpansion = buildConstructionRhythmExpansion(buildingPatternExecutionProfile, params.taskRows)
@@ -2720,15 +2812,20 @@ async function loadBaselineGenerationDateOptions(
   options?: { runtimeEvidenceMode?: 'record' | 'no_write' },
 ): Promise<BaselineGenerationDateOptions> {
   const projectId = taskRows.map((task) => String(task.project_id ?? '').trim()).find(Boolean) ?? null
-  const [forecastByTaskId, durationSuggestions, constructionCalendar] = await Promise.all([
-    loadLatestForecastsByTaskId(taskRows),
-    loadMissingDateDurationSuggestions(taskRows, options),
-    resolveConstructionCalendarContext({
+  const constructionCalendar = await resolveConstructionCalendarContext({
+    projectId,
+    onError: (error) => logger.warn('[baselineGenerationService] failed to resolve construction calendar context', {
       projectId,
-      onError: (error) => logger.warn('[baselineGenerationService] failed to resolve construction calendar context', {
-        projectId,
-        error: error instanceof Error ? error.message : String(error),
-      }),
+      error: error instanceof Error ? error.message : String(error),
+    }),
+  })
+  const durationAsOfDate = businessDateKey(new Date(), constructionCalendar?.timezone ?? DEFAULT_DURATION_TIMEZONE)
+  const [forecastByTaskId, durationSuggestions] = await Promise.all([
+    loadLatestForecastsByTaskId(taskRows),
+    loadMissingDateDurationSuggestions(taskRows, {
+      ...options,
+      constructionCalendar,
+      durationAsOfDate,
     }),
   ])
   const planningReplayReadbackByTaskId = new Map<string, PlanningReplayCalibrationReadback>()
@@ -2754,7 +2851,9 @@ async function loadBaselineGenerationDateOptions(
   return {
     forecastByTaskId,
     durationSuggestionByTaskId: durationSuggestions.durationSuggestionByTaskId,
+    durationSuggestionMetrics: durationSuggestions.metrics,
     constructionCalendar,
+    durationAsOfDate,
     planningReplayReadbackByTaskId,
   }
 }
@@ -2791,6 +2890,10 @@ export async function prepareBaselineGenerationForProject(params: {
         candidateItems: generatedItems,
         taskRows,
         criticalTaskIds,
+        asOf: dateOptions.durationAsOfDate ?? undefined,
+        timezone: dateOptions.constructionCalendar?.timezone ?? undefined,
+        constructionCalendar: dateOptions.constructionCalendar,
+        durationSuggestionMetrics: dateOptions.durationSuggestionMetrics,
       })
     : null
 
@@ -2845,6 +2948,10 @@ export async function prepareBaselineGenerationForBaseline(
     candidateItems: generatedItems,
     taskRows,
     criticalTaskIds,
+    asOf: dateOptions.durationAsOfDate ?? undefined,
+    timezone: dateOptions.constructionCalendar?.timezone ?? undefined,
+    constructionCalendar: dateOptions.constructionCalendar,
+    durationSuggestionMetrics: dateOptions.durationSuggestionMetrics,
   })
 
   return {

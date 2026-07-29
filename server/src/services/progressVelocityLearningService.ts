@@ -119,6 +119,8 @@ interface DurationExperienceRowsLoadResult {
   rows: DurationExperienceSampleRow[]
   rejectedExperienceTierSampleCount: number
   rejectedExperienceTierReasonCounts: Record<string, number>
+  rejectedSampleStrengthSampleCount: number
+  rejectedSampleStrengthReasonCounts: Record<string, number>
 }
 
 function normalizeText(value: unknown) {
@@ -164,6 +166,8 @@ function emptyDurationExperienceRowsLoadResult(): DurationExperienceRowsLoadResu
     rows: [],
     rejectedExperienceTierSampleCount: 0,
     rejectedExperienceTierReasonCounts: {},
+    rejectedSampleStrengthSampleCount: 0,
+    rejectedSampleStrengthReasonCounts: {},
   }
 }
 
@@ -223,9 +227,20 @@ function validateProgressVelocityExperienceTier(row: DurationExperienceSampleRow
 function filterProgressVelocityExperienceRows(rows: DurationExperienceSampleRow[]): DurationExperienceRowsLoadResult {
   const acceptedRows: DurationExperienceSampleRow[] = []
   const rejectedExperienceTierReasonCounts: Record<string, number> = {}
+  const rejectedSampleStrengthReasonCounts: Record<string, number> = {}
   let rejectedExperienceTierSampleCount = 0
+  let rejectedSampleStrengthSampleCount = 0
 
   for (const row of rows) {
+    const sampleStrength = normalizeText(row.sample_strength).toLowerCase()
+    if (sampleStrength !== 'strong' && sampleStrength !== 'medium') {
+      rejectedSampleStrengthSampleCount += 1
+      addReasonCount(
+        rejectedSampleStrengthReasonCounts,
+        sampleStrength ? `sample_strength_${sampleStrength}_not_benchmark_eligible` : 'sample_strength_missing',
+      )
+      continue
+    }
     const validation = validateProgressVelocityExperienceTier(row)
     if (validation.isValid) {
       acceptedRows.push(row)
@@ -239,6 +254,8 @@ function filterProgressVelocityExperienceRows(rows: DurationExperienceSampleRow[
     rows: acceptedRows,
     rejectedExperienceTierSampleCount,
     rejectedExperienceTierReasonCounts,
+    rejectedSampleStrengthSampleCount,
+    rejectedSampleStrengthReasonCounts,
   }
 }
 
@@ -350,6 +367,10 @@ function readActiveForecastLearningObservation(row: DurationExperienceSampleRow)
   const policy = normalizeText(observation.production_consumption_policy ?? observation.productionConsumptionPolicy)
   if (target !== 'forecast_ratio_velocity_multiplier') return null
   if (policy !== 'active_velocity_multiplier_input') return null
+  const forecastDurationSource = normalizeText(
+    observation.forecast_duration_source ?? observation.forecastDurationSource,
+  )
+  if (forecastDurationSource !== 'execution_reference_duration') return null
   const actualStartSource = normalizeText(
     observation.actual_start_source
       ?? observation.actualStartSource
@@ -795,6 +816,12 @@ export async function buildProjectProgressVelocityLearning(
     projectExperienceLoad.rejectedExperienceTierReasonCounts,
     companyExperienceLoad.rejectedExperienceTierReasonCounts,
   )
+  const rejectedSampleStrengthSampleCount = projectExperienceLoad.rejectedSampleStrengthSampleCount
+    + companyExperienceLoad.rejectedSampleStrengthSampleCount
+  const rejectedSampleStrengthReasonCounts = mergeReasonCounts(
+    projectExperienceLoad.rejectedSampleStrengthReasonCounts,
+    companyExperienceLoad.rejectedSampleStrengthReasonCounts,
+  )
   const learningTarget = forecastRatioSampleCount === samples.length
     ? 'actual_to_forecast'
     : forecastRatioSampleCount > 0
@@ -837,6 +864,8 @@ export async function buildProjectProgressVelocityLearning(
       learningBucketValidation: 'duration_context_policy_state_bucket_T1_only',
       rejectedExperienceTierSampleCount,
       rejectedExperienceTierReasonCounts,
+      rejectedSampleStrengthSampleCount,
+      rejectedSampleStrengthReasonCounts,
       projectExperienceSampleCount: projectExperienceRows.length,
       companyFallbackSampleCount: companyFallbackRows.length,
       crossProjectSampleWeight: companyFallbackRows.length > 0 ? CROSS_PROJECT_SAMPLE_WEIGHT : null,

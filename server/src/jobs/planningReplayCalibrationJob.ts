@@ -2,7 +2,7 @@ import { logger } from '../middleware/logger.js'
 import { withDatabaseTransaction, type DatabaseTransactionOptions } from '../database.js'
 import { listActiveProjectIds } from '../services/activeProjectService.js'
 import { executeSQL } from '../services/dbService.js'
-import { runJobWithRetry } from '../services/jobRuntime.js'
+import { runJobWithRetry, runWithJobLease } from '../services/jobRuntime.js'
 import { PersistentWallClockJobTimer } from '../services/persistentJobScheduleService.js'
 import { requireCompletePlanningReplayCalibration } from '../services/scheduledDurationJobResultPolicyService.js'
 import {
@@ -46,6 +46,7 @@ export type PlanningReplayCalibrationSweepInput = {
 export type PlanningReplayCalibrationJobOptions = {
   sweep?: (params?: PlanningReplayCalibrationSweepInput) => Promise<PlanningReplayCalibrationJobResult>
   withTransaction?: <T>(work: () => Promise<T>, options?: DatabaseTransactionOptions) => Promise<T>
+  leaseRunner?: typeof runWithJobLease
 }
 
 function emptyResult(): PlanningReplayCalibrationJobResult {
@@ -416,29 +417,50 @@ export class PlanningReplayCalibrationJob {
     try {
       const sweep = this.options.sweep ?? runPlanningReplayCalibrationSweep
       const withTransaction = this.options.withTransaction ?? withDatabaseTransaction
-      const { attempts, value } = await runJobWithRetry(
+      const leaseRunner = this.options.leaseRunner ?? runWithJobLease
+      const { attempts, value: leaseRun } = await runJobWithRetry(
         {
           jobName: 'planningReplayCalibrationJob',
           jobId,
           triggeredBy: trigger,
         },
-        async (_attempt, attemptContext) => {
-          this.activeTransactionCallbackCount += 1
-          try {
-            return await withTransaction(async () => {
-              throwIfAborted(attemptContext.signal)
-              const result = await sweep({
-                projectIds: Array.isArray(projectIds) ? projectIds : null,
-                signal: attemptContext.signal,
-              })
-              throwIfAborted(attemptContext.signal)
-              return requireCompletePlanningReplayCalibration(result)
-            }, { signal: attemptContext.signal })
-          } finally {
-            this.activeTransactionCallbackCount = Math.max(0, this.activeTransactionCallbackCount - 1)
-          }
-        },
+        async (_attempt, attemptContext) => leaseRunner(
+          {
+            jobName: 'planningReplayCalibrationJob',
+            jobId,
+          },
+          async (lease) => {
+            this.activeTransactionCallbackCount += 1
+            const signal = AbortSignal.any([attemptContext.signal, lease.signal])
+            try {
+              lease.assertActive()
+              const value = await withTransaction(async () => {
+                throwIfAborted(signal)
+                const result = await sweep({
+                  projectIds: Array.isArray(projectIds) ? projectIds : null,
+                  signal,
+                })
+                throwIfAborted(signal)
+                lease.assertActive()
+                return requireCompletePlanningReplayCalibration(result)
+              }, { signal })
+              lease.assertActive()
+              return value
+            } finally {
+              this.activeTransactionCallbackCount = Math.max(0, this.activeTransactionCallbackCount - 1)
+            }
+          },
+        ),
       )
+      if (!leaseRun.acquired) {
+        logger.warn('planningReplayCalibrationJob skipped because distributed lease was not acquired', {
+          trigger,
+          jobId,
+          reason: 'lease_not_acquired',
+        })
+        return { skipped: true as const, reason: 'lease_not_acquired' as const }
+      }
+      const { value } = leaseRun
       this.lastRun = new Date()
       logger.info('planningReplayCalibrationJob completed', { trigger, jobId, attempts, ...value })
       return value

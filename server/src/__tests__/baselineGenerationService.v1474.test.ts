@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   supabaseFrom: vi.fn(),
   buildProjectCriticalPathSnapshot: vi.fn(),
   getProjectCriticalPathSnapshot: vi.fn(),
+  resolveConstructionCalendarContext: vi.fn(),
 }))
 
 vi.mock('../services/taskDurationForecastService.js', () => ({
@@ -31,6 +32,14 @@ vi.mock('../services/projectCriticalPathService.js', () => ({
 vi.mock('../services/planningReplayCalibrationService.js', () => ({
   readPlanningReplayCalibrationReadback: mocks.readPlanningReplayCalibrationReadback,
 }))
+
+vi.mock('../services/constructionCalendar.js', async () => {
+  const actual = await vi.importActual<typeof import('../services/constructionCalendar.js')>('../services/constructionCalendar.js')
+  return {
+    ...actual,
+    resolveConstructionCalendarContext: mocks.resolveConstructionCalendarContext,
+  }
+})
 
 vi.mock('../middleware/logger.js', () => ({
   logger: {
@@ -62,6 +71,39 @@ import type { ConstructionCalendarContext } from '../services/constructionCalend
 import { evaluateBaselineConfirmationGate } from '../services/planningRevisionPoolService.js'
 
 describe('baselineGenerationService v1.4.7.4 seed consumption', () => {
+  const authoritativeE2Calendar: ConstructionCalendarContext = {
+    basis: 'official_construction_calendar_seed',
+    windows: [],
+    calendarRef: 'work_calendar',
+    calendarVersion: 'calendar-v1',
+    timezone: 'Asia/Shanghai',
+    availability: 'available',
+    unavailableReason: null,
+  }
+
+  function authoritativeE2Forecast(overrides: Record<string, unknown> = {}) {
+    return {
+      forecast_finish_date: '2026-05-18',
+      remaining_duration_days: 10,
+      confidence_level: 'medium',
+      generated_at: '2026-05-09T01:00:00.000Z',
+      is_current: true,
+      metadata: {
+        remainingDuration: {
+          value: 10,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          asOf: '2026-05-09',
+          availability: 'available',
+          unavailableReason: null,
+        },
+      },
+      ...overrides,
+    }
+  }
+
   beforeEach(() => {
     mocks.forecastBatchTasks.mockReset()
     mocks.getTaskDurationSuggestion.mockReset()
@@ -86,6 +128,16 @@ describe('baselineGenerationService v1.4.7.4 seed consumption', () => {
     mocks.supabaseFrom.mockReset()
     mocks.buildProjectCriticalPathSnapshot.mockReset()
     mocks.getProjectCriticalPathSnapshot.mockReset()
+    mocks.resolveConstructionCalendarContext.mockReset()
+    mocks.resolveConstructionCalendarContext.mockResolvedValue({
+      basis: 'calendar_day',
+      windows: [],
+      calendarRef: null,
+      calendarVersion: null,
+      timezone: 'Asia/Shanghai',
+      availability: 'unavailable',
+      unavailableReason: 'construction_calendar_identity_missing',
+    })
     vi.restoreAllMocks()
     algorithmSeedResolver.clearAlgorithmSeedResolverCache()
   })
@@ -185,13 +237,11 @@ describe('baselineGenerationService v1.4.7.4 seed consumption', () => {
       } as any,
     ], [], new Set(), {
       forecastByTaskId: new Map([
-        ['task-e2', {
-          forecast_finish_date: '2026-05-18',
-          remaining_duration_days: 12,
-          confidence_level: 'medium',
-        }],
+        ['task-e2', authoritativeE2Forecast()],
       ]),
-    } as any)
+      constructionCalendar: authoritativeE2Calendar,
+      durationAsOfDate: '2026-05-09',
+    })
 
     expect(item.planned_start_date).toBe('2026-05-03')
     expect(item.planned_end_date).toBe('2026-05-18')
@@ -199,6 +249,141 @@ describe('baselineGenerationService v1.4.7.4 seed consumption', () => {
     expect(item.seed_versions?.[0]).toEqual(expect.objectContaining({
       dateSource: 'task_duration_forecast_e2',
     }))
+  })
+
+  it('requires current exact typed E2 authority before extending regenerated baseline dates', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-05-09T02:00:00.000Z'))
+    const frozenCalendar: ConstructionCalendarContext = {
+      basis: 'official_construction_calendar_seed',
+      windows: [],
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      availability: 'available',
+      unavailableReason: null,
+    }
+    mocks.resolveConstructionCalendarContext.mockResolvedValue(frozenCalendar)
+    mockSupabaseRows({
+      task_baselines: [],
+      task_baseline_items: [],
+      tasks: [
+        {
+          id: 'task-historical-e2',
+          project_id: 'project-baseline-e2-authority',
+          title: 'Historical E2 must not extend baseline',
+          planned_start_date: '2026-05-01',
+          planned_end_date: '2026-05-10',
+          actual_start_date: '2026-05-03',
+          status: 'in_progress',
+          progress: 40,
+          is_executable: true,
+          is_wbs_summary: false,
+          sort_order: 1,
+        },
+        {
+          id: 'task-untyped-current-e2',
+          project_id: 'project-baseline-e2-authority',
+          title: 'Untyped current E2 must not extend baseline',
+          planned_start_date: '2026-05-01',
+          planned_end_date: '2026-05-10',
+          actual_start_date: '2026-05-03',
+          status: 'in_progress',
+          progress: 40,
+          is_executable: true,
+          is_wbs_summary: false,
+          sort_order: 2,
+        },
+        {
+          id: 'task-authoritative-current-e2',
+          project_id: 'project-baseline-e2-authority',
+          title: 'Authoritative current E2 may extend baseline',
+          planned_start_date: '2026-05-01',
+          planned_end_date: '2026-05-10',
+          actual_start_date: '2026-05-03',
+          status: 'in_progress',
+          progress: 40,
+          is_executable: true,
+          is_wbs_summary: false,
+          sort_order: 3,
+        },
+      ],
+      task_duration_forecasts: [
+        {
+          task_id: 'task-historical-e2',
+          forecast_finish_date: '2026-05-18',
+          is_current: false,
+          generated_at: '2026-05-09T01:00:00.000Z',
+          metadata: {
+            remainingDuration: {
+              value: 10,
+              unit: 'construction_production_day',
+              calendarRef: 'work_calendar-old',
+              calendarVersion: 'calendar-v0',
+              timezone: 'Asia/Shanghai',
+              asOf: '2026-05-08',
+              availability: 'available',
+              unavailableReason: null,
+            },
+          },
+        },
+        {
+          task_id: 'task-untyped-current-e2',
+          forecast_finish_date: '2026-05-18',
+          is_current: true,
+          generated_at: '2026-05-09T01:00:00.000Z',
+          metadata: {},
+        },
+        {
+          task_id: 'task-authoritative-current-e2',
+          forecast_finish_date: '2026-05-18',
+          is_current: true,
+          generated_at: '2026-05-09T01:00:00.000Z',
+          metadata: {
+            remainingDuration: {
+              value: 10,
+              unit: 'construction_production_day',
+              calendarRef: 'work_calendar',
+              calendarVersion: 'calendar-v1',
+              timezone: 'Asia/Shanghai',
+              asOf: '2026-05-09',
+              availability: 'available',
+              unavailableReason: null,
+            },
+          },
+        },
+      ],
+    })
+    mocks.getProjectCriticalPathSnapshot.mockResolvedValue({
+      projectId: 'project-baseline-e2-authority',
+      displayTaskIds: [],
+      autoTaskIds: [],
+      manualAttentionTaskIds: [],
+      manualInsertedTaskIds: [],
+      watchedTaskIds: [],
+      primaryChain: null,
+      alternateChains: [],
+      edges: [],
+      tasks: [],
+      projectDurationDays: 0,
+      calculationStatus: 'fresh',
+    })
+    mocks.buildProjectCriticalPathSnapshot.mockRejectedValue(new Error('skip E3 rescheduling'))
+
+    try {
+      const preparation = await prepareBaselineGenerationForProject({
+        projectId: 'project-baseline-e2-authority',
+      })
+      const generatedByTaskId = new Map(
+        preparation.generatedItems.map((item) => [item.source_task_id, item]),
+      )
+
+      expect(generatedByTaskId.get('task-historical-e2')?.planned_end_date).toBe('2026-05-10')
+      expect(generatedByTaskId.get('task-untyped-current-e2')?.planned_end_date).toBe('2026-05-10')
+      expect(generatedByTaskId.get('task-authoritative-current-e2')?.planned_end_date).toBe('2026-05-18')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('applies bounded planning replay readback to baseline draft duration metadata without mutating facts', () => {
@@ -216,12 +401,10 @@ describe('baselineGenerationService v1.4.7.4 seed consumption', () => {
       } as any,
     ], [], new Set(), {
       forecastByTaskId: new Map([
-        ['task-replay-e2', {
-          forecast_finish_date: '2026-05-18',
-          remaining_duration_days: 12,
-          confidence_level: 'medium',
-        }],
+        ['task-replay-e2', authoritativeE2Forecast()],
       ]),
+      constructionCalendar: authoritativeE2Calendar,
+      durationAsOfDate: '2026-05-09',
       planningReplayReadbackByTaskId: new Map([
         ['task-replay-e2', {
           status: 'ready',
@@ -464,13 +647,22 @@ describe('baselineGenerationService v1.4.7.4 seed consumption', () => {
     ], [], new Set(), {
       durationSuggestionByTaskId: new Map([
         ['task-e1', {
-          recommendedDurationDays: 6,
+          contextualReferenceDays: 6,
           durationOutputCode: 'contextual_reference',
           confidenceLevel: 'medium',
           durationCalibrationSource: 'standard_work_duration_seed',
           durationProvenance: 'standard_work_duration_seed',
         }],
       ]),
+      constructionCalendar: {
+        basis: 'official_construction_calendar_seed',
+        windows: [],
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        availability: 'available',
+        unavailableReason: null,
+      },
     } as any)
 
     expect(item.planned_start_date).toBe('2026-06-01')
@@ -481,6 +673,245 @@ describe('baselineGenerationService v1.4.7.4 seed consumption', () => {
     expect(item.seed_versions?.[0]).toEqual(expect.objectContaining({
       dateSource: 'duration_suggestion_e1',
     }))
+  })
+
+  it('does not fill missing draft dates from a production-day suggestion without an authoritative calendar', () => {
+    const [item] = buildGeneratedBaselineItemsFromTasksV1474([
+      {
+        id: 'task-e1-calendar-unavailable',
+        project_id: 'project-1',
+        title: 'Missing end date without calendar identity',
+        status: 'todo',
+        progress: 0,
+        planned_start_date: '2026-06-01',
+        planned_end_date: null,
+      } as any,
+    ], [], new Set(), {
+      durationSuggestionByTaskId: new Map([
+        ['task-e1-calendar-unavailable', {
+          contextualReferenceDays: 6,
+          durationOutputCode: 'contextual_reference',
+          confidenceLevel: 'medium',
+          durationCalibrationSource: 'standard_work_duration_seed',
+          durationProvenance: 'standard_work_duration_seed',
+        }],
+      ]),
+      constructionCalendar: {
+        basis: 'calendar_day',
+        windows: [],
+        calendarRef: null,
+        calendarVersion: null,
+        timezone: 'Asia/Shanghai',
+        availability: 'unavailable',
+        unavailableReason: 'calendar_identity_missing',
+      },
+    } as any)
+
+    expect(item.planned_start_date).toBe('2026-06-01')
+    expect(item.planned_end_date).toBeNull()
+    expect(item.source_reason).not.toContain('E1 duration suggestion')
+  })
+
+  it('does not fill missing draft dates from naked recommended duration under an authoritative calendar', () => {
+    const [item] = buildGeneratedBaselineItemsFromTasksV1474([
+      {
+        id: 'task-e1-naked-recommended',
+        project_id: 'project-1',
+        title: 'Missing end date with naked recommendation',
+        status: 'todo',
+        progress: 0,
+        planned_start_date: '2026-06-01',
+        planned_end_date: null,
+      } as any,
+    ], [], new Set(), {
+      durationSuggestionByTaskId: new Map([
+        ['task-e1-naked-recommended', {
+          recommendedDurationDays: 6,
+          durationOutputCode: 'contextual_reference',
+          confidenceLevel: 'medium',
+        }],
+      ]),
+      constructionCalendar: {
+        basis: 'official_construction_calendar_seed',
+        windows: [],
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        availability: 'available',
+        unavailableReason: null,
+      },
+    } as any)
+
+    expect(item.planned_end_date).toBeNull()
+    expect(item.source_reason).not.toContain('E1 duration suggestion')
+  })
+
+  it('does not fill missing draft dates from a raw remaining forecast alias', () => {
+    const [item] = buildGeneratedBaselineItemsFromTasksV1474([
+      {
+        id: 'task-e1-raw-remaining',
+        project_id: 'project-1',
+        title: 'Missing end date with raw remaining forecast',
+        status: 'todo',
+        progress: 0,
+        planned_start_date: '2026-06-01',
+        planned_end_date: null,
+      } as any,
+    ], [], new Set(), {
+      durationSuggestionByTaskId: new Map([
+        ['task-e1-raw-remaining', {
+          remainingForecastDays: 999,
+          durationOutputCode: 'remaining_forecast',
+          confidenceLevel: 'medium',
+        }],
+      ]),
+      constructionCalendar: {
+        basis: 'official_construction_calendar_seed',
+        windows: [],
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        availability: 'available',
+        unavailableReason: null,
+      },
+    } as any)
+
+    expect(item.planned_end_date).toBeNull()
+    expect(item.source_reason).not.toContain('E1 duration suggestion')
+  })
+
+  it.each([
+    {
+      label: 'unavailable',
+      remainingDuration: {
+        value: null,
+        unit: 'construction_production_day',
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-06-01',
+        availability: 'unavailable',
+        unavailableReason: 'duration_value_missing',
+      },
+    },
+    {
+      label: 'calendar identity mismatch',
+      remainingDuration: {
+        value: 3,
+        unit: 'construction_production_day',
+        calendarRef: 'other_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-06-01',
+        availability: 'available',
+        unavailableReason: null,
+      },
+    },
+    {
+      label: 'invalid asOf',
+      remainingDuration: {
+        value: 3,
+        unit: 'construction_production_day',
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        asOf: '',
+        availability: 'available',
+        unavailableReason: null,
+      },
+    },
+    {
+      label: 'stale asOf',
+      remainingDuration: {
+        value: 3,
+        unit: 'construction_production_day',
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-05-31',
+        availability: 'available',
+        unavailableReason: null,
+      },
+    },
+  ])('does not fall back to raw remaining duration when the typed fact is $label', ({ remainingDuration }) => {
+    const [item] = buildGeneratedBaselineItemsFromTasksV1474([
+      {
+        id: 'task-e1-invalid-typed-remaining',
+        project_id: 'project-1',
+        title: 'Missing end date with invalid governed remaining duration',
+        status: 'todo',
+        progress: 0,
+        planned_start_date: '2026-06-01',
+        planned_end_date: null,
+      } as any,
+    ], [], new Set(), {
+      durationSuggestionByTaskId: new Map([
+        ['task-e1-invalid-typed-remaining', {
+          durationOutputCode: 'remaining_forecast',
+          remainingForecastDays: 999,
+          remainingDuration,
+          confidenceLevel: 'medium',
+        }],
+      ]),
+      constructionCalendar: {
+        basis: 'official_construction_calendar_seed',
+        windows: [],
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        availability: 'available',
+        unavailableReason: null,
+      },
+      durationAsOfDate: '2026-06-01',
+    } as any)
+
+    expect(item.planned_end_date).toBeNull()
+    expect(item.source_reason).not.toContain('E1 duration suggestion')
+  })
+
+  it('fills missing draft dates from a typed remaining duration with matching calendar identity', () => {
+    const [item] = buildGeneratedBaselineItemsFromTasksV1474([
+      {
+        id: 'task-e1-typed-remaining',
+        project_id: 'project-1',
+        title: 'Missing end date with governed remaining duration',
+        status: 'todo',
+        progress: 0,
+        planned_start_date: '2026-06-01',
+        planned_end_date: null,
+      } as any,
+    ], [], new Set(), {
+      durationSuggestionByTaskId: new Map([
+        ['task-e1-typed-remaining', {
+          durationOutputCode: 'remaining_forecast',
+          remainingDuration: {
+            value: 3,
+            unit: 'construction_production_day',
+            calendarRef: 'work_calendar',
+            calendarVersion: 'calendar-v1',
+            timezone: 'Asia/Shanghai',
+            asOf: '2026-06-01',
+            availability: 'available',
+            unavailableReason: null,
+          },
+          confidenceLevel: 'medium',
+        }],
+      ]),
+      constructionCalendar: {
+        basis: 'official_construction_calendar_seed',
+        windows: [],
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        availability: 'available',
+        unavailableReason: null,
+      },
+      durationAsOfDate: '2026-06-01',
+    } as any)
+
+    expect(item.planned_start_date).toBe('2026-06-01')
+    expect(item.planned_end_date).toBe('2026-06-03')
+    expect(item.source_reason).toContain('E1 duration suggestion')
   })
 
   it('fills E1 missing draft dates with construction production days instead of raw calendar days', () => {
@@ -514,7 +945,7 @@ describe('baselineGenerationService v1.4.7.4 seed consumption', () => {
       },
       durationSuggestionByTaskId: new Map([
         ['task-e1-calendar', {
-          recommendedDurationDays: 3,
+          contextualReferenceDays: 3,
           durationOutputCode: 'contextual_reference',
           confidenceLevel: 'medium',
           durationCalibrationSource: 'standard_work_duration_seed',
@@ -575,15 +1006,15 @@ describe('baselineGenerationService v1.4.7.4 seed consumption', () => {
       },
     ] as any, [], new Set(), {
       forecastByTaskId: new Map([
-        ['task-e2-provenance', {
-          forecast_finish_date: '2026-05-18',
-          remaining_duration_days: 12,
+        ['task-e2-provenance', authoritativeE2Forecast({
           confidence_level: 'high',
           duration_calibration_source: 'e2_runtime_forecast',
           duration_provenance: 'task_duration_forecast_service',
-        }],
+        })],
       ]),
-    } as any)
+      constructionCalendar: authoritativeE2Calendar,
+      durationAsOfDate: '2026-05-09',
+    })
 
     expect(items.find((item) => item.source_task_id === 'task-actual')?.generation_metadata).toEqual(expect.objectContaining({
       date_source: 'actual_execution',
@@ -1914,5 +2345,228 @@ describe('baselineGenerationService v1.4.7.4 seed consumption', () => {
     expect(candidate.metrics.suggestedDurationCount).toBe(0)
     expect(candidate.generationSummary.missingPlanDateCount).toBe(1)
     expect(candidate.generationSummary.suggestedDurationCount).toBe(0)
+  })
+
+  it('uses one frozen calendar and asOf context for baseline generation and candidate scoring', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-05-31T16:30:00.000Z'))
+    const frozenCalendar = {
+      basis: 'official_construction_calendar_seed',
+      windows: [],
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      availability: 'available',
+      unavailableReason: null,
+    } as const
+    mocks.resolveConstructionCalendarContext.mockResolvedValue(frozenCalendar)
+    mockSupabaseRows({
+      task_baselines: [{
+        id: 'baseline-1',
+        project_id: 'project-1',
+        version: 1,
+        status: 'confirmed',
+      }],
+      task_baseline_items: [],
+      tasks: [
+        {
+          id: 'task-missing-end',
+          project_id: 'project-1',
+          title: 'In-progress task missing its end date',
+          planned_start_date: '2026-06-01',
+          planned_end_date: null,
+          actual_start_date: '2026-06-01',
+          status: 'in_progress',
+          progress: 20,
+          is_executable: true,
+          is_wbs_summary: false,
+          sort_order: 1,
+        },
+        {
+          id: 'task-missing-end-2',
+          project_id: 'project-1',
+          title: 'Second in-progress task missing its end date',
+          planned_start_date: '2026-06-01',
+          planned_end_date: null,
+          actual_start_date: '2026-06-01',
+          status: 'in_progress',
+          progress: 10,
+          is_executable: true,
+          is_wbs_summary: false,
+          sort_order: 2,
+        },
+      ],
+      duration_forecasts: [],
+    })
+    mocks.getTaskDurationSuggestion.mockResolvedValue({
+      durationOutputCode: 'remaining_forecast',
+      durationOutputSemanticFieldName: 'remainingForecastDays',
+      remainingDuration: {
+        value: 5,
+        unit: 'construction_production_day',
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-06-01',
+        availability: 'available',
+        unavailableReason: null,
+      },
+      confidenceLevel: 'medium',
+    })
+    mocks.getProjectCriticalPathSnapshot.mockResolvedValue({
+      projectId: 'project-1',
+      displayTaskIds: ['task-missing-end'],
+      autoTaskIds: ['task-missing-end'],
+      manualAttentionTaskIds: [],
+      manualInsertedTaskIds: [],
+      watchedTaskIds: [],
+      primaryChain: null,
+      alternateChains: [],
+      edges: [],
+      tasks: [],
+      projectDurationDays: 5,
+      calculationStatus: 'fresh',
+    })
+    mocks.buildProjectCriticalPathSnapshot.mockResolvedValue({
+      projectId: 'project-1',
+      autoTaskIds: ['task-missing-end'],
+      manualAttentionTaskIds: [],
+      manualInsertedTaskIds: [],
+      primaryChain: null,
+      alternateChains: [],
+      displayTaskIds: ['task-missing-end'],
+      watchedTaskIds: [],
+      edges: [],
+      tasks: [{
+        taskId: 'task-missing-end',
+        title: 'In-progress task missing its end date',
+        floatDays: 0,
+        durationDays: 5,
+        earliestStartOffsetDays: 0,
+        earliestFinishOffsetDays: 5,
+        isAutoCritical: true,
+        isManualAttention: false,
+        isManualInserted: false,
+      }],
+      networkSchedule: [{
+        taskId: 'task-missing-end',
+        earliestStartOffsetDays: 0,
+        earliestFinishOffsetDays: 5,
+        floatDays: 0,
+      }],
+      projectDurationDays: 5,
+      calculationStatus: 'fresh',
+      networkLineage: { criticalPathInputHash: 'hash-missing-end' },
+    })
+
+    try {
+      const preparation = await prepareBaselineGenerationForProject({ projectId: 'project-1' })
+
+      expect(preparation.generatedItems[0]).toEqual(expect.objectContaining({
+        planned_start_date: '2026-06-01',
+        planned_end_date: '2026-06-05',
+      }))
+      expect(preparation.candidate?.metrics.suggestedDurationCount).toBe(2)
+      expect(preparation.candidate?.reasons).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: 'duration_suggestion_input', severity: 'info' }),
+      ]))
+      expect(mocks.getTaskDurationSuggestion).toHaveBeenCalledTimes(2)
+      for (const [input] of mocks.getTaskDurationSuggestion.mock.calls) {
+        expect(input).toEqual(expect.objectContaining({ workCalendar: frozenCalendar }))
+      }
+      expect(mocks.resolveConstructionCalendarContext).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('rejects a stale remaining suggestion consistently in baseline generation and candidate scoring', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-05-31T16:30:00.000Z'))
+    mocks.resolveConstructionCalendarContext.mockResolvedValue({
+      basis: 'official_construction_calendar_seed',
+      windows: [],
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      availability: 'available',
+      unavailableReason: null,
+    })
+    mockSupabaseRows({
+      task_baselines: [{ id: 'baseline-1', project_id: 'project-1', version: 1, status: 'confirmed' }],
+      task_baseline_items: [],
+      tasks: [{
+        id: 'task-stale-end',
+        project_id: 'project-1',
+        title: 'Task with stale remaining suggestion',
+        planned_start_date: '2026-06-01',
+        planned_end_date: null,
+        actual_start_date: '2026-06-01',
+        status: 'in_progress',
+        progress: 20,
+        is_executable: true,
+        is_wbs_summary: false,
+        sort_order: 1,
+      }],
+      duration_forecasts: [],
+    })
+    mocks.getTaskDurationSuggestion.mockResolvedValue({
+      durationOutputCode: 'remaining_forecast',
+      remainingDuration: {
+        value: 5,
+        unit: 'construction_production_day',
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-05-31',
+        availability: 'available',
+        unavailableReason: null,
+      },
+      confidenceLevel: 'medium',
+    })
+    mocks.getProjectCriticalPathSnapshot.mockResolvedValue({
+      projectId: 'project-1',
+      displayTaskIds: ['task-stale-end'],
+      autoTaskIds: ['task-stale-end'],
+      manualAttentionTaskIds: [],
+      manualInsertedTaskIds: [],
+      watchedTaskIds: [],
+      primaryChain: null,
+      alternateChains: [],
+      edges: [],
+      tasks: [],
+      projectDurationDays: 1,
+      calculationStatus: 'fresh',
+    })
+    mocks.buildProjectCriticalPathSnapshot.mockResolvedValue({
+      projectId: 'project-1',
+      autoTaskIds: ['task-stale-end'],
+      manualAttentionTaskIds: [],
+      manualInsertedTaskIds: [],
+      primaryChain: null,
+      alternateChains: [],
+      displayTaskIds: ['task-stale-end'],
+      watchedTaskIds: [],
+      edges: [],
+      tasks: [],
+      networkSchedule: [],
+      projectDurationDays: 1,
+      calculationStatus: 'fresh',
+      networkLineage: { criticalPathInputHash: 'hash-stale-end' },
+    })
+
+    try {
+      const preparation = await prepareBaselineGenerationForProject({ projectId: 'project-1' })
+
+      expect(preparation.generatedItems[0]?.planned_end_date).toBe('2026-06-01')
+      expect(preparation.generatedItems[0]?.source_reason).not.toContain('E1 duration suggestion')
+      expect(preparation.candidate?.metrics.suggestedDurationCount).toBe(0)
+      expect(preparation.candidate?.reasons).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: 'duration_suggestion_input', severity: 'warning' }),
+      ]))
+      expect(mocks.getTaskDurationSuggestion).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

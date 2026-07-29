@@ -22,6 +22,7 @@ const state = vi.hoisted(() => ({
   projectOverlays: [] as Array<Record<string, unknown>>,
   residualOverlays: [] as Array<Record<string, unknown>>,
   seedRecords: [] as Array<Record<string, unknown>>,
+  seedRecordsByStandardWorkCode: {} as Record<string, Array<Record<string, unknown>>>,
   insertedForecasts: [] as Array<Record<string, unknown>>,
   updatedForecasts: [] as Array<Record<string, unknown>>,
 }))
@@ -166,8 +167,11 @@ vi.mock('../services/executionFactGovernanceService.js', () => ({
 }))
 
 vi.mock('../services/algorithmSeedResolver.js', () => ({
-  resolveAlgorithmSeedRecords: vi.fn(async (seedType: string) => {
-    if (seedType === 'work_calendar') return state.seedRecords
+  resolveAlgorithmSeedRecords: vi.fn(async (seedType: string, context?: Record<string, unknown>) => {
+    if (seedType === 'work_calendar') {
+      const standardWorkCode = String(context?.standardWorkCode ?? '')
+      return state.seedRecordsByStandardWorkCode[standardWorkCode] ?? state.seedRecords
+    }
     if (seedType === 'earliest_start_rule') {
       return [{ __stableCode: 'unstarted_overdue_default', scenario: 'unstarted_overdue' }]
     }
@@ -190,6 +194,7 @@ const {
   refreshDailyActiveTaskDurationForecasts,
   recordTaskDurationForecastRuntimeConsumption,
 } = await import('../services/taskDurationForecastService.js')
+const { businessDateKey } = await import('../services/durationMetricService.js')
 
 function projectIdForTask(taskId: string) {
   return String(state.tasks.find((task) => task.id === taskId)?.project_id ?? 'project-1')
@@ -242,6 +247,23 @@ function baseSuggestion() {
   }
 }
 
+function cachedProductionDurationMetric(
+  value: number,
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    value,
+    unit: 'construction_production_day',
+    calendarRef: 'work_calendar',
+    calendarVersion: 'calendar-test-v1',
+    timezone: 'Asia/Shanghai',
+    asOf: '2026-05-18',
+    availability: 'available',
+    unavailableReason: null,
+    ...overrides,
+  }
+}
+
 describe('taskDurationForecastService', () => {
   beforeEach(() => {
     vi.useFakeTimers()
@@ -273,6 +295,7 @@ describe('taskDurationForecastService', () => {
       counts_as_construction_shutdown: false,
       __resolverVersionId: 'calendar-test-v1',
     }]
+    state.seedRecordsByStandardWorkCode = {}
     state.insertedForecasts = []
     state.updatedForecasts = []
     mocks.from.mockImplementation((table: string) => createBuilder(table))
@@ -1761,10 +1784,62 @@ describe('taskDurationForecastService', () => {
       }),
     })
     expect(state.insertedForecasts[0]?.execution_reference_days).toBe(10)
+    expect(state.insertedForecasts[0]?.metadata).toEqual(expect.objectContaining({
+      executionReferenceDuration: {
+        value: 10,
+        unit: 'construction_production_day',
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-test-v1',
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-05-18',
+        availability: 'available',
+        unavailableReason: null,
+      },
+    }))
     expect(state.insertedForecasts[0]).not.toHaveProperty('recommended_duration_days')
     expect(forecast.executionReferenceDays).toBe(10)
     expect(forecast.confidenceScore).not.toBe(62)
     expect(state.insertedForecasts[0]?.confidence_score).toBe(forecast.confidenceScore)
+  })
+
+  it('freezes one instant for execution reference asOf and generated_at across a business-day boundary', async () => {
+    vi.setSystemTime(new Date('2026-05-18T15:59:59.900Z'))
+    state.tasks = [{
+      id: 'task-cross-midnight-forecast',
+      project_id: 'project-1',
+      title: 'Cross-midnight forecast task',
+      planned_start_date: '2026-05-01',
+      planned_end_date: '2026-05-20',
+      actual_start_date: '2026-05-01',
+      progress: 20,
+      status: 'in_progress',
+    }]
+    mocks.loadAlgorithmAssetLearnableParameterRuntimeValue.mockImplementation(async (input: Record<string, unknown>) => {
+      vi.setSystemTime(new Date('2026-05-18T16:00:00.100Z'))
+      return {
+        status: 'runtime_parameter_not_found',
+        runtimeConsumable: false,
+        parameterKey: String(input.parameterKey ?? ''),
+        runtimeValue: null,
+        consumptionMode: 'stable',
+        publicationKey: null,
+        publicationStatus: null,
+        scopeLevel: null,
+        companyId: null,
+        projectId: null,
+        rollbackTarget: null,
+        reasons: ['runtime_parameter_publication_not_found'],
+        writesSeedRuntimeDirectly: false,
+      }
+    })
+
+    await forecastTaskDuration('task-cross-midnight-forecast')
+
+    const inserted = state.insertedForecasts.at(-1)
+    const metric = (inserted?.metadata as Record<string, any>)?.executionReferenceDuration
+    const generatedAt = String(inserted?.generated_at ?? '')
+    expect(metric?.asOf).toBe('2026-05-18')
+    expect(businessDateKey(new Date(generatedAt), metric?.timezone)).toBe(metric?.asOf)
   })
 
   it('routes gate-style acceptance and handover tasks away from SPI/EAC extrapolation', async () => {
@@ -2469,7 +2544,17 @@ describe('taskDurationForecastService', () => {
       forecast_finish_date: '2026-05-29',
       remaining_duration_days: 9,
       forecast_delay_days: 8,
+      generated_at: '2026-05-18T08:00:00.000Z',
       is_current: true,
+      metadata: {
+        remainingDuration: cachedProductionDurationMetric(9),
+        forecastDelay: cachedProductionDurationMetric(8),
+        probabilityDurationMetrics: {
+          p20RemainingDuration: cachedProductionDurationMetric(7),
+          p50RemainingDuration: cachedProductionDurationMetric(9),
+          p80RemainingDuration: cachedProductionDurationMetric(11),
+        },
+      },
     }]
 
     const forecast = await forecastTaskDuration('task-child')
@@ -2485,6 +2570,147 @@ describe('taskDurationForecastService', () => {
         expect.objectContaining({
           dependencyTaskId: 'task-parent',
           source: 'current_dependency_forecast',
+        }),
+      ]),
+    })
+  })
+
+  it('does not propagate a predecessor raw forecast finish without a valid typed tuple', async () => {
+    state.tasks = [
+      {
+        id: 'task-raw-dependency-child',
+        project_id: 'project-1',
+        title: 'Install facade panels',
+        planned_start_date: '2026-05-18',
+        planned_end_date: '2026-05-22',
+        progress: 0,
+      },
+      {
+        id: 'task-raw-dependency-parent',
+        project_id: 'project-1',
+        title: 'Finish embedded parts',
+        planned_start_date: '2026-05-11',
+        planned_end_date: '2026-05-22',
+        progress: 50,
+      },
+    ]
+    state.dependencies = [{
+      task_id: 'task-raw-dependency-child',
+      project_id: 'project-1',
+      dependency_task_id: 'task-raw-dependency-parent',
+      dependency_type: 'FS',
+      lag_days: 0,
+      required_for_start: true,
+      status: 'active',
+    }]
+    state.dependencyForecasts = [{
+      task_id: 'task-raw-dependency-parent',
+      project_id: 'project-1',
+      forecast_finish_date: '2026-06-15',
+      remaining_duration_days: 20,
+      forecast_delay_days: 15,
+      generated_at: '2026-05-18T08:00:00.000Z',
+      is_current: true,
+      metadata: {},
+    }]
+
+    const forecast = await forecastTaskDuration('task-raw-dependency-child')
+    const dependencyPropagation = forecast.forecastSources?.dependencyPropagation as Record<string, any>
+
+    expect(dependencyPropagation.blockingDependencies).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        dependencyTaskId: 'task-raw-dependency-parent',
+        source: 'dependency_planned_finish',
+        expectedFinishDate: '2026-05-22',
+      }),
+    ]))
+    expect(dependencyPropagation.blockingDependencies).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: 'current_dependency_forecast' }),
+    ]))
+  })
+
+  it.each([
+    { tupleCalendarVersion: 'calendar-B', expectedSource: 'current_dependency_forecast', expectedFinishDate: '2026-05-29' },
+    { tupleCalendarVersion: 'calendar-A', expectedSource: 'dependency_planned_finish', expectedFinishDate: '2026-05-22' },
+  ])('validates a predecessor forecast against its own calendar when tuple version is $tupleCalendarVersion', async ({
+    tupleCalendarVersion,
+    expectedSource,
+    expectedFinishDate,
+  }) => {
+    state.seedRecordsByStandardWorkCode = {
+      'WORK-A': [{
+        holidayCode: 'calendar_a',
+        holidayName: 'Calendar A',
+        calendarKind: 'forecast_calendar_window',
+        startDate: '2099-01-01',
+        endDate: '2099-01-01',
+        counts_as_construction_shutdown: false,
+        __resolverVersionId: 'calendar-A',
+      }],
+      'WORK-B': [{
+        holidayCode: 'calendar_b',
+        holidayName: 'Calendar B',
+        calendarKind: 'forecast_calendar_window',
+        startDate: '2099-01-01',
+        endDate: '2099-01-01',
+        counts_as_construction_shutdown: false,
+        __resolverVersionId: 'calendar-B',
+      }],
+    }
+    state.tasks = [
+      {
+        id: 'task-calendar-child',
+        project_id: 'project-1',
+        standard_work_code: 'WORK-A',
+        title: 'Calendar A child',
+        planned_start_date: '2026-05-18',
+        planned_end_date: '2026-05-22',
+        progress: 0,
+      },
+      {
+        id: 'task-calendar-parent',
+        project_id: 'project-1',
+        standard_work_code: 'WORK-B',
+        title: 'Calendar B predecessor',
+        planned_start_date: '2026-05-11',
+        planned_end_date: '2026-05-22',
+        progress: 50,
+      },
+    ]
+    state.dependencies = [{
+      task_id: 'task-calendar-child',
+      project_id: 'project-1',
+      dependency_task_id: 'task-calendar-parent',
+      dependency_type: 'FS',
+      lag_days: 0,
+      required_for_start: true,
+      status: 'active',
+    }]
+    state.dependencyForecasts = [{
+      task_id: 'task-calendar-parent',
+      project_id: 'project-1',
+      forecast_finish_date: '2026-05-29',
+      generated_at: '2026-05-18T08:00:00.000Z',
+      is_current: true,
+      metadata: {
+        remainingDuration: cachedProductionDurationMetric(9, { calendarVersion: tupleCalendarVersion }),
+        forecastDelay: cachedProductionDurationMetric(4, { calendarVersion: tupleCalendarVersion }),
+        probabilityDurationMetrics: {
+          p20RemainingDuration: cachedProductionDurationMetric(7, { calendarVersion: tupleCalendarVersion }),
+          p50RemainingDuration: cachedProductionDurationMetric(9, { calendarVersion: tupleCalendarVersion }),
+          p80RemainingDuration: cachedProductionDurationMetric(11, { calendarVersion: tupleCalendarVersion }),
+        },
+      },
+    }]
+
+    const forecast = await forecastTaskDuration('task-calendar-child')
+
+    expect(forecast.forecastSources?.dependencyPropagation).toMatchObject({
+      blockingDependencies: expect.arrayContaining([
+        expect.objectContaining({
+          dependencyTaskId: 'task-calendar-parent',
+          source: expectedSource,
+          expectedFinishDate,
         }),
       ]),
     })
@@ -2526,7 +2752,17 @@ describe('taskDurationForecastService', () => {
       forecast_finish_date: '2026-05-29',
       remaining_duration_days: 9,
       forecast_delay_days: 8,
+      generated_at: '2026-05-18T08:00:00.000Z',
       is_current: true,
+      metadata: {
+        remainingDuration: cachedProductionDurationMetric(9),
+        forecastDelay: cachedProductionDurationMetric(8),
+        probabilityDurationMetrics: {
+          p20RemainingDuration: cachedProductionDurationMetric(7),
+          p50RemainingDuration: cachedProductionDurationMetric(9),
+          p80RemainingDuration: cachedProductionDurationMetric(11),
+        },
+      },
     }]
     mocks.listCurrentExecutionFacts.mockImplementation(async (input: { entityIds: string[] }) => (
       input.entityIds.includes('task-authority-parent')
@@ -2660,7 +2896,16 @@ describe('taskDurationForecastService', () => {
       remaining_duration_days: 20,
       forecast_delay_days: 20,
       is_current: true,
-      created_at: '2026-05-18T08:00:00.000Z',
+      generated_at: '2026-05-18T08:00:00.000Z',
+      metadata: {
+        remainingDuration: cachedProductionDurationMetric(20),
+        forecastDelay: cachedProductionDurationMetric(20),
+        probabilityDurationMetrics: {
+          p20RemainingDuration: cachedProductionDurationMetric(18),
+          p50RemainingDuration: cachedProductionDurationMetric(20),
+          p80RemainingDuration: cachedProductionDurationMetric(22),
+        },
+      },
     }]
 
     const forecast = await forecastTaskDuration('task-ff-child')
@@ -2772,7 +3017,16 @@ describe('taskDurationForecastService', () => {
       remaining_duration_days: 3,
       forecast_delay_days: 3,
       is_current: true,
-      created_at: '2026-05-18T08:00:00.000Z',
+      generated_at: '2026-05-18T08:00:00.000Z',
+      metadata: {
+        remainingDuration: cachedProductionDurationMetric(3),
+        forecastDelay: cachedProductionDurationMetric(3),
+        probabilityDurationMetrics: {
+          p20RemainingDuration: cachedProductionDurationMetric(2),
+          p50RemainingDuration: cachedProductionDurationMetric(3),
+          p80RemainingDuration: cachedProductionDurationMetric(4),
+        },
+      },
     }]
     state.conditions = [{
       id: 'condition-material-known',
@@ -3811,7 +4065,51 @@ describe('taskDurationForecastService', () => {
     expect(state.updatedForecasts).toHaveLength(0)
   })
 
+  it('treats a nonexistent generated_at date as stale in daily freshness metrics', async () => {
+    vi.setSystemTime(new Date('2026-03-02T08:05:00.000Z'))
+    state.tasks = [{
+      id: 'task-invalid-generated-at',
+      project_id: 'project-1',
+      title: 'Invalid generated-at task',
+      planned_start_date: '2026-03-01',
+      planned_end_date: '2026-03-10',
+      actual_start_date: '2026-03-01',
+      progress: 20,
+      status: 'in_progress',
+      updated_at: '2026-03-02T07:00:00.000Z',
+    }]
+    state.dependencyForecasts = [{
+      id: 'forecast-invalid-generated-at',
+      task_id: 'task-invalid-generated-at',
+      project_id: 'project-1',
+      is_current: true,
+      generated_at: '2026-02-30T08:00:00.000Z',
+      metadata: {},
+    }]
+
+    const result = await refreshDailyActiveTaskDurationForecasts({
+      limit: 10,
+      batchSize: 1,
+      maxRuntimeMs: 0,
+      freshnessSloMs: 36 * 60 * 60 * 1000,
+    })
+
+    expect(result).toMatchObject({
+      scanned: 1,
+      refreshed: 0,
+      skippedByTimeBudget: 1,
+      staleCurrentForecastsBefore: 1,
+      staleCurrentForecastsAfter: 1,
+      freshCurrentForecastsAfter: 0,
+      freshnessSloMet: false,
+    })
+  })
+
   it('reads execution_reference_days before legacy recommended_duration_days from current forecast cache', async () => {
+    state.tasks = [{
+      id: 'task-cached-reference',
+      project_id: 'project-1',
+    }]
     state.dependencyForecasts = [{
       id: 'forecast-current-reference',
       task_id: 'task-cached-reference',
@@ -3826,8 +4124,28 @@ describe('taskDurationForecastService', () => {
       confidence_score: 66,
       forecast_source: 'cached_current',
       is_current: true,
+      generated_at: '2026-05-18T08:00:00.000Z',
       created_at: '2026-05-18T08:00:00.000Z',
-      metadata: {},
+      metadata: {
+        remainingDuration: cachedProductionDurationMetric(7),
+        forecastDelay: cachedProductionDurationMetric(0),
+        probabilityDuration: {
+          method: 'pert_from_existing_percentiles',
+          source: 'cached_probability',
+          p20RemainingDays: 6,
+          p50RemainingDays: 7,
+          p80RemainingDays: 9,
+          expectedRemainingDays: 7,
+          variance: 1,
+          standardDeviationDays: 1,
+          confidenceBandWidthDays: 3,
+        },
+        probabilityDurationMetrics: {
+          p20RemainingDuration: cachedProductionDurationMetric(6),
+          p50RemainingDuration: cachedProductionDurationMetric(7),
+          p80RemainingDuration: cachedProductionDurationMetric(9),
+        },
+      },
     }]
 
     const forecast = await forecastTaskDuration('task-cached-reference', { useCache: true })
@@ -3835,18 +4153,91 @@ describe('taskDurationForecastService', () => {
     expect(forecast.executionReferenceDays).toBe(14)
     expect(forecast.recommendedDurationDays).toBe(14)
     expect(forecast.remainingDuration).toMatchObject({
-      value: null,
-      availability: 'unavailable',
-      unavailableReason: 'construction_calendar_identity_missing',
+      value: 7,
+      availability: 'available',
     })
-    expect(forecast.remainingDurationDays).toBeNull()
-    expect(forecast.remainingForecastDays).toBeNull()
-    expect(forecast.forecastFinishDate).toBeNull()
+    expect(forecast.remainingDurationDays).toBe(7)
+    expect(forecast.remainingForecastDays).toBe(7)
+    expect(forecast.forecastFinishDate).toBe('2026-05-25')
     expect(state.insertedForecasts).toHaveLength(0)
     expect(state.updatedForecasts).toHaveLength(0)
   })
 
+  it.each([
+    {
+      label: 'previous business-day authority',
+      generatedAt: '2026-05-18T08:00:00.000Z',
+      metricAsOf: '2026-05-18',
+    },
+    {
+      label: 'generated_at beyond the allowed future clock skew',
+      generatedAt: '2026-05-19T10:00:00.000Z',
+      metricAsOf: '2026-05-19',
+    },
+  ])('refreshes instead of returning a cache entry with $label', async ({ generatedAt, metricAsOf }) => {
+    vi.setSystemTime(new Date('2026-05-19T08:00:00.000Z'))
+    state.tasks = [{
+      id: 'task-cache-authority-refresh',
+      project_id: 'project-1',
+      title: 'Cache authority refresh task',
+      planned_start_date: '2026-05-01',
+      planned_end_date: '2026-05-31',
+      actual_start_date: '2026-05-02',
+      progress: 20,
+      status: 'in_progress',
+    }]
+    state.dependencyForecasts = [{
+      id: 'forecast-cache-authority-refresh',
+      task_id: 'task-cache-authority-refresh',
+      project_id: 'project-1',
+      execution_reference_days: 99,
+      conservative_duration_days: 120,
+      remaining_duration_days: 88,
+      forecast_finish_date: '2026-09-30',
+      forecast_delay_days: 70,
+      confidence_level: 'high',
+      confidence_score: 99,
+      forecast_source: 'cached_current',
+      is_current: true,
+      generated_at: generatedAt,
+      metadata: {
+        remainingDuration: cachedProductionDurationMetric(88, { asOf: metricAsOf }),
+        forecastDelay: cachedProductionDurationMetric(70, { asOf: metricAsOf }),
+        probabilityDuration: {
+          method: 'pert_from_existing_percentiles',
+          source: 'cached_probability',
+          p20RemainingDays: 80,
+          p50RemainingDays: 88,
+          p80RemainingDays: 96,
+          expectedRemainingDays: 88,
+          variance: 16,
+          standardDeviationDays: 4,
+          confidenceBandWidthDays: 16,
+        },
+        probabilityDurationMetrics: {
+          p20RemainingDuration: cachedProductionDurationMetric(80, { asOf: metricAsOf }),
+          p50RemainingDuration: cachedProductionDurationMetric(88, { asOf: metricAsOf }),
+          p80RemainingDuration: cachedProductionDurationMetric(96, { asOf: metricAsOf }),
+        },
+      },
+    }]
+
+    const forecast = await forecastTaskDuration('task-cache-authority-refresh', { useCache: true })
+
+    expect(mocks.getTaskDurationSuggestion).toHaveBeenCalledOnce()
+    expect(state.insertedForecasts).toHaveLength(1)
+    expect(forecast.remainingDuration).toMatchObject({
+      availability: 'available',
+      asOf: '2026-05-19',
+    })
+    expect(forecast.remainingDurationDays).not.toBe(88)
+  })
+
   it('maps PostgreSQL DATE objects from current forecasts without losing the calendar date', async () => {
+    state.tasks = [{
+      id: 'task-date-object',
+      project_id: 'project-1',
+    }]
     state.dependencyForecasts = [{
       id: 'forecast-current-date-object',
       task_id: 'task-date-object',
@@ -3861,17 +4252,15 @@ describe('taskDurationForecastService', () => {
       confidence_score: 90,
       forecast_source: 'cached_current',
       is_current: true,
+      generated_at: '2026-05-18T08:00:00.000Z',
       created_at: '2026-05-18T08:00:00.000Z',
       metadata: {
-        remainingDuration: {
-          value: 8,
-          unit: 'construction_production_day',
-          calendarRef: 'work_calendar',
-          calendarVersion: 'calendar-v1',
-          timezone: 'Asia/Shanghai',
-          asOf: '2026-05-18',
-          availability: 'available',
-          unavailableReason: null,
+        remainingDuration: cachedProductionDurationMetric(8),
+        forecastDelay: cachedProductionDurationMetric(0),
+        probabilityDurationMetrics: {
+          p20RemainingDuration: cachedProductionDurationMetric(6),
+          p50RemainingDuration: cachedProductionDurationMetric(8),
+          p80RemainingDuration: cachedProductionDurationMetric(10),
         },
       },
     }]
@@ -3882,6 +4271,335 @@ describe('taskDurationForecastService', () => {
     })
 
     expect(forecast?.forecastFinishDate).toBe('2026-04-20')
+  })
+
+  it('requires generated_at instead of authorizing a cached tuple from created_at', async () => {
+    state.tasks = [{
+      id: 'task-cached-created-at-only',
+      project_id: 'project-1',
+    }]
+    state.dependencyForecasts = [{
+      id: 'forecast-current-created-at-only',
+      task_id: 'task-cached-created-at-only',
+      project_id: 'project-1',
+      execution_reference_days: 12,
+      conservative_duration_days: 16,
+      forecast_finish_date: '2026-05-28',
+      forecast_source: 'cached_current',
+      is_current: true,
+      generated_at: null,
+      created_at: '2026-05-18T08:00:00.000Z',
+      metadata: {
+        optimisticRemainingDays: 6,
+        conservativeRemainingDays: 10,
+        remainingDuration: cachedProductionDurationMetric(8),
+        forecastDelay: cachedProductionDurationMetric(2),
+        probabilityDuration: {
+          method: 'pert_from_existing_percentiles',
+          source: 'cached_probability',
+          p20RemainingDays: 6,
+          p50RemainingDays: 8,
+          p80RemainingDays: 10,
+          expectedRemainingDays: 8,
+          variance: 1,
+          standardDeviationDays: 1,
+          confidenceBandWidthDays: 4,
+        },
+        probabilityDurationMetrics: {
+          p20RemainingDuration: cachedProductionDurationMetric(6),
+          p50RemainingDuration: cachedProductionDurationMetric(8),
+          p80RemainingDuration: cachedProductionDurationMetric(10),
+        },
+      },
+    }]
+
+    const [forecast] = await listCurrentTaskDurationForecasts(['task-cached-created-at-only'], {
+      projectId: 'project-1',
+      maxAgeMs: null,
+    })
+
+    expect(forecast?.remainingDuration.availability).toBe('unavailable')
+    expect(forecast?.remainingDurationDays).toBeNull()
+    expect(forecast?.forecastFinishDate).toBeNull()
+    expect(forecast?.optimisticRemainingDays).toBeNull()
+    expect(forecast?.conservativeRemainingDays).toBeNull()
+    expect(forecast?.probabilityDuration).toBeNull()
+    expect(Object.values(forecast?.probabilityDurationMetrics ?? {}).every((metric) => (
+      metric.availability === 'unavailable'
+    ))).toBe(true)
+  })
+
+  it('fails closed when a cached tuple uses an obsolete resolved calendar identity', async () => {
+    state.tasks = [{
+      id: 'task-cached-obsolete-calendar',
+      project_id: 'project-1',
+    }]
+    state.dependencyForecasts = [{
+      id: 'forecast-current-obsolete-calendar',
+      task_id: 'task-cached-obsolete-calendar',
+      project_id: 'project-1',
+      execution_reference_days: 12,
+      conservative_duration_days: 16,
+      forecast_finish_date: '2026-05-28',
+      forecast_source: 'cached_current',
+      is_current: true,
+      generated_at: '2026-05-18T08:00:00.000Z',
+      metadata: {
+        optimisticRemainingDays: 60,
+        conservativeRemainingDays: 100,
+        remainingDuration: cachedProductionDurationMetric(8, { calendarVersion: 'calendar-v0' }),
+        forecastDelay: cachedProductionDurationMetric(2, { calendarVersion: 'calendar-v0' }),
+        probabilityDurationMetrics: {
+          p20RemainingDuration: cachedProductionDurationMetric(6, { calendarVersion: 'calendar-v0' }),
+          p50RemainingDuration: cachedProductionDurationMetric(8, { calendarVersion: 'calendar-v0' }),
+          p80RemainingDuration: cachedProductionDurationMetric(10, { calendarVersion: 'calendar-v0' }),
+        },
+      },
+    }]
+
+    const [forecast] = await listCurrentTaskDurationForecasts(['task-cached-obsolete-calendar'], {
+      projectId: 'project-1',
+      maxAgeMs: null,
+    })
+
+    expect(forecast?.remainingDuration.availability).toBe('unavailable')
+    expect(forecast?.remainingDurationDays).toBeNull()
+    expect(forecast?.forecastFinishDate).toBeNull()
+    expect(forecast?.optimisticRemainingDays).toBeNull()
+    expect(forecast?.conservativeRemainingDays).toBeNull()
+  })
+
+  it.each([
+    {
+      label: 'cross-timezone-midnight timestamp',
+      now: '2026-05-18T16:05:00.000Z',
+      generatedAt: '2026-05-18T16:00:00.000Z',
+      metricAsOf: '2026-05-18',
+    },
+    {
+      label: 'nonexistent Gregorian timestamp',
+      now: '2026-03-02T08:05:00.000Z',
+      generatedAt: '2026-02-30T08:00:00.000Z',
+      metricAsOf: '2026-03-02',
+    },
+  ])('fails closed for a cached tuple with a $label', async ({ now, generatedAt, metricAsOf }) => {
+    vi.setSystemTime(new Date(now))
+    state.tasks = [{
+      id: 'task-cached-invalid-generated-at',
+      project_id: 'project-1',
+    }]
+    state.dependencyForecasts = [{
+      id: 'forecast-current-invalid-generated-at',
+      task_id: 'task-cached-invalid-generated-at',
+      project_id: 'project-1',
+      execution_reference_days: 12,
+      conservative_duration_days: 16,
+      forecast_finish_date: '2026-03-10',
+      forecast_source: 'cached_current',
+      is_current: true,
+      generated_at: generatedAt,
+      metadata: {
+        remainingDuration: cachedProductionDurationMetric(8, { asOf: metricAsOf }),
+        forecastDelay: cachedProductionDurationMetric(2, { asOf: metricAsOf }),
+        probabilityDurationMetrics: {
+          p20RemainingDuration: cachedProductionDurationMetric(6, { asOf: metricAsOf }),
+          p50RemainingDuration: cachedProductionDurationMetric(8, { asOf: metricAsOf }),
+          p80RemainingDuration: cachedProductionDurationMetric(10, { asOf: metricAsOf }),
+        },
+      },
+    }]
+
+    const [forecast] = await listCurrentTaskDurationForecasts(['task-cached-invalid-generated-at'], {
+      projectId: 'project-1',
+      maxAgeMs: null,
+    })
+
+    expect(forecast?.remainingDuration.availability).toBe('unavailable')
+    expect(forecast?.remainingDurationDays).toBeNull()
+    expect(forecast?.forecastFinishDate).toBeNull()
+  })
+
+  it('projects legacy cached percentile aliases only from the validated typed tuple', async () => {
+    state.tasks = [{
+      id: 'task-cached-percentile-projection',
+      project_id: 'project-1',
+    }]
+    state.dependencyForecasts = [{
+      id: 'forecast-current-percentile-projection',
+      task_id: 'task-cached-percentile-projection',
+      project_id: 'project-1',
+      execution_reference_days: 12,
+      conservative_duration_days: 16,
+      forecast_finish_date: '2026-05-28',
+      forecast_source: 'cached_current',
+      is_current: true,
+      generated_at: '2026-05-18T08:00:00.000Z',
+      metadata: {
+        optimisticRemainingDays: 60,
+        conservativeRemainingDays: 100,
+        remainingDuration: cachedProductionDurationMetric(8),
+        forecastDelay: cachedProductionDurationMetric(2),
+        probabilityDuration: {
+          method: 'pert_from_existing_percentiles',
+          source: 'cached_probability',
+          p20RemainingDays: 60,
+          p50RemainingDays: 80,
+          p80RemainingDays: 100,
+          expectedRemainingDays: 80,
+          variance: 100,
+          standardDeviationDays: 10,
+          confidenceBandWidthDays: 40,
+        },
+        probabilityDurationMetrics: {
+          p20RemainingDuration: cachedProductionDurationMetric(6),
+          p50RemainingDuration: cachedProductionDurationMetric(8),
+          p80RemainingDuration: cachedProductionDurationMetric(10),
+        },
+      },
+    }]
+
+    const [forecast] = await listCurrentTaskDurationForecasts(['task-cached-percentile-projection'], {
+      projectId: 'project-1',
+      maxAgeMs: null,
+    })
+
+    expect(forecast?.optimisticRemainingDays).toBe(6)
+    expect(forecast?.conservativeRemainingDays).toBe(10)
+    expect(forecast?.probabilityDuration).toEqual(expect.objectContaining({
+      p20RemainingDays: 6,
+      p50RemainingDays: 8,
+      p80RemainingDays: 10,
+    }))
+  })
+
+  it('fails closed for the entire cached forecast tuple when remaining duration uses calendar days', async () => {
+    state.dependencyForecasts = [{
+      id: 'forecast-current-calendar-day',
+      task_id: 'task-cached-calendar-day',
+      project_id: 'project-1',
+      execution_reference_days: 12,
+      conservative_duration_days: 16,
+      forecast_finish_date: '2026-05-28',
+      delay_risk_index: 0.4,
+      confidence_level: 'high',
+      confidence_score: 88,
+      forecast_source: 'cached_current',
+      is_current: true,
+      generated_at: '2026-05-18T08:00:00.000Z',
+      metadata: {
+        optimisticRemainingDays: 6,
+        conservativeRemainingDays: 10,
+        remainingDuration: cachedProductionDurationMetric(8, {
+          unit: 'calendar_day',
+          calendarRef: 'gregorian',
+          calendarVersion: 'ISO-8601',
+        }),
+        forecastDelay: cachedProductionDurationMetric(2),
+        probabilityDuration: {
+          method: 'pert_from_existing_percentiles',
+          source: 'cached_probability',
+          p20RemainingDays: 6,
+          p50RemainingDays: 8,
+          p80RemainingDays: 10,
+          expectedRemainingDays: 8,
+          variance: 1,
+          standardDeviationDays: 1,
+          confidenceBandWidthDays: 4,
+        },
+        probabilityDurationMetrics: {
+          p20RemainingDuration: cachedProductionDurationMetric(6),
+          p50RemainingDuration: cachedProductionDurationMetric(8),
+          p80RemainingDuration: cachedProductionDurationMetric(10),
+        },
+      },
+    }]
+
+    const [forecast] = await listCurrentTaskDurationForecasts(['task-cached-calendar-day'], {
+      projectId: 'project-1',
+      maxAgeMs: null,
+    })
+
+    expect(forecast?.remainingDuration).toEqual(expect.objectContaining({
+      value: null,
+      unit: 'construction_production_day',
+      availability: 'unavailable',
+    }))
+    expect(forecast?.remainingDurationDays).toBeNull()
+    expect(forecast?.remainingForecastDays).toBeNull()
+    expect(forecast?.forecastFinishDate).toBeNull()
+    expect(forecast?.forecastDelayDays).toBeNull()
+    expect(forecast?.delayRiskIndex).toBeNull()
+    expect(forecast?.optimisticRemainingDays).toBeNull()
+    expect(forecast?.conservativeRemainingDays).toBeNull()
+    expect(forecast?.probabilityDuration).toBeNull()
+    expect(Object.values(forecast?.probabilityDurationMetrics ?? {}).every((metric) => (
+      metric.value === null && metric.availability === 'unavailable'
+    ))).toBe(true)
+  })
+
+  it.each([
+    {
+      label: 'calendar identity',
+      delayOverrides: {},
+      p80Overrides: { calendarRef: 'other_calendar' },
+    },
+    {
+      label: 'asOf',
+      delayOverrides: { asOf: '2026-05-17' },
+      p80Overrides: {},
+    },
+  ])('fails closed for the entire cached forecast tuple when $label drifts', async ({ delayOverrides, p80Overrides }) => {
+    state.dependencyForecasts = [{
+      id: `forecast-current-mismatched-${String(Object.keys(delayOverrides)[0] ?? 'calendar')}`,
+      task_id: 'task-cached-mismatched-tuple',
+      project_id: 'project-1',
+      execution_reference_days: 12,
+      conservative_duration_days: 16,
+      forecast_finish_date: '2026-05-28',
+      delay_risk_index: 0.4,
+      confidence_level: 'high',
+      confidence_score: 88,
+      forecast_source: 'cached_current',
+      is_current: true,
+      generated_at: '2026-05-18T08:00:00.000Z',
+      metadata: {
+        optimisticRemainingDays: 6,
+        conservativeRemainingDays: 10,
+        remainingDuration: cachedProductionDurationMetric(8),
+        forecastDelay: cachedProductionDurationMetric(2, delayOverrides),
+        probabilityDuration: {
+          method: 'pert_from_existing_percentiles',
+          source: 'cached_probability',
+          p20RemainingDays: 6,
+          p50RemainingDays: 8,
+          p80RemainingDays: 10,
+          expectedRemainingDays: 8,
+          variance: 1,
+          standardDeviationDays: 1,
+          confidenceBandWidthDays: 4,
+        },
+        probabilityDurationMetrics: {
+          p20RemainingDuration: cachedProductionDurationMetric(6),
+          p50RemainingDuration: cachedProductionDurationMetric(8),
+          p80RemainingDuration: cachedProductionDurationMetric(10, p80Overrides),
+        },
+      },
+    }]
+
+    const [forecast] = await listCurrentTaskDurationForecasts(['task-cached-mismatched-tuple'], {
+      projectId: 'project-1',
+      maxAgeMs: null,
+    })
+
+    expect(forecast?.remainingDurationDays).toBeNull()
+    expect(forecast?.remainingForecastDays).toBeNull()
+    expect(forecast?.forecastFinishDate).toBeNull()
+    expect(forecast?.forecastDelayDays).toBeNull()
+    expect(forecast?.delayRiskIndex).toBeNull()
+    expect(forecast?.probabilityDuration).toBeNull()
+    expect(forecast?.remainingDuration.availability).toBe('unavailable')
+    expect(forecast?.forecastDelay.availability).toBe('unavailable')
+    expect(Object.values(forecast?.probabilityDurationMetrics ?? {}).every((metric) => metric.availability === 'unavailable')).toBe(true)
   })
 
   it('applies duration context factors to remaining forecast and lowers forecast confidence', async () => {

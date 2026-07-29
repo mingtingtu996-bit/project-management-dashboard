@@ -25,6 +25,7 @@ vi.mock('../database.js', () => ({
 }))
 
 const {
+  compareAndSetNotificationById,
   deleteNotificationById,
   insertNotification,
   listNotifications,
@@ -138,5 +139,49 @@ describe('notification store direct runtime persistence', () => {
     expect(String(mocks.executeSQL.mock.calls[0][0])).toContain('project_id = ?')
     expect(String(mocks.executeSQL.mock.calls[1][0])).toContain('lifecycle_status = ?')
     expect(mocks.from).not.toHaveBeenCalled()
+  })
+
+  it('compares the stored lifecycle version before updating a notification', async () => {
+    expect(compareAndSetNotificationById).toBeTypeOf('function')
+    if (typeof compareAndSetNotificationById !== 'function') return
+
+    mocks.executeSQL
+      .mockResolvedValueOnce([{ id: 'notification-1' }])
+      .mockResolvedValueOnce([])
+
+    await expect(compareAndSetNotificationById(
+      'notification-1',
+      {
+        title: 'Authoritative title',
+        lifecycle_status: 'active',
+        updated_at: '2026-07-29T10:00:00.000Z',
+      },
+      {
+        ...currentNotification,
+        lifecycle_status: 'active',
+        updated_at: '2026-07-29T09:00:00.000Z',
+      },
+    )).resolves.toBe(true)
+
+    const [sql, params] = mocks.executeSQL.mock.calls[0]
+    expect(String(sql)).toContain('updated_at IS NOT DISTINCT FROM ?')
+    expect(String(sql)).toContain("COALESCE(lifecycle_status, 'active') = ?")
+    expect(String(sql)).toContain('RETURNING id')
+    expect(params).toEqual(expect.arrayContaining([
+      'notification-1',
+      'project-1',
+      '2026-07-29T09:00:00.000Z',
+      'active',
+    ]))
+
+    await expect(compareAndSetNotificationById(
+      'notification-1',
+      { title: 'Stale title' },
+      {
+        ...currentNotification,
+        lifecycle_status: 'active',
+        updated_at: '2026-07-29T09:00:00.000Z',
+      },
+    )).resolves.toBe(false)
   })
 })

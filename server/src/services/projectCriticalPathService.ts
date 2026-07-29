@@ -45,6 +45,7 @@ import { recordProjectCriticalPathConsumedArtifacts } from './durationRuntimeCon
 import {
   buildConstructionProductionDayDurationMetric,
   businessDateKey,
+  normalizeDurationMetricDto,
   type DurationMetricDto,
 } from './durationMetricService.js'
 import { isUnconfirmedHeuristicDependency } from './dependencyAuthorityService.js'
@@ -1852,10 +1853,52 @@ function isCriticalPathExternalWaitRow(row?: CriticalPathTaskRow | null) {
   return row ? readCriticalPathDurationContributionMode(row) === 'external_wait' : false
 }
 
+function readMatchingForecastRemainingDays(
+  forecast: TaskDurationForecast | undefined,
+  asOfDate: string,
+  calendar?: ConstructionCalendarContext | null,
+) {
+  return readMatchingForecastDurationMetric(forecast?.remainingDuration, asOfDate, calendar)
+}
+
+function readMatchingForecastDurationMetric(
+  value: unknown,
+  asOfDate: string,
+  calendar?: ConstructionCalendarContext | null,
+) {
+  if (!isAuthoritativeConstructionCalendar(calendar)) return null
+  const metric = normalizeDurationMetricDto(value)
+  if (
+    !metric
+    || metric.availability !== 'available'
+    || metric.unit !== 'construction_production_day'
+    || metric.calendarRef !== calendar.calendarRef
+    || metric.calendarVersion !== calendar.calendarVersion
+    || metric.timezone !== calendar.timezone
+    || metric.asOf !== asOfDate
+  ) return null
+  return readPositiveInt(metric.value)
+}
+
+function readMatchingForecastProbabilityWindow(
+  forecast: TaskDurationForecast | undefined,
+  asOfDate: string,
+  calendar?: ConstructionCalendarContext | null,
+) {
+  const metrics = forecast?.probabilityDurationMetrics
+  const p20 = readMatchingForecastDurationMetric(metrics?.p20RemainingDuration, asOfDate, calendar)
+  const p50 = readMatchingForecastDurationMetric(metrics?.p50RemainingDuration, asOfDate, calendar)
+  const p80 = readMatchingForecastDurationMetric(metrics?.p80RemainingDuration, asOfDate, calendar)
+  if (!p20 || !p50 || !p80) return null
+  if (p20 > p50 || p50 > p80) return null
+  return { p20, p50, p80 }
+}
+
 function buildTaskNodes(
   rows: CriticalPathTaskRow[],
   currentForecasts = new Map<string, TaskDurationForecast>(),
   calendar?: ConstructionCalendarContext | null,
+  asOfDate = '',
   projectResourceFacts: CriticalPathProjectResourceFacts = {},
 ): TaskNode[] {
   const eligibleTasks = rows.filter((row) => {
@@ -1869,9 +1912,9 @@ function buildTaskNodes(
     const startDate = parseDate(task.start_date ?? task.planned_start_date)!
     const endDate = parseDate(task.end_date ?? task.planned_end_date)!
     const currentForecast = currentForecasts.get(task.id)
-    const probabilityDuration = currentForecast?.probabilityDuration ?? null
+    const probabilityDuration = readMatchingForecastProbabilityWindow(currentForecast, asOfDate, calendar)
     const forecastRemainingDays = isRuntimeInProgressRow(task)
-      ? readPositiveInt(currentForecast?.remainingDurationDays)
+      ? readMatchingForecastRemainingDays(currentForecast, asOfDate, calendar)
       : null
     const rawDuration = forecastRemainingDays ?? cpmSpanDays(startDate, endDate, calendar) ?? 1
     const durationGuard = evaluateDurationPlausibility({
@@ -1883,10 +1926,11 @@ function buildTaskNodes(
       clamp: true,
     })
     const duration = durationGuard.durationDays ?? rawDuration
-    const p50DurationDays = readPositiveInt((probabilityDuration as any)?.p50RemainingDays)
-    const p80DurationDays = readPositiveInt((probabilityDuration as any)?.p80RemainingDays)
-    const standardDeviationDays = readPositiveInt((probabilityDuration as any)?.standardDeviationDays)
-    const confidenceBandWidthDays = readPositiveInt((probabilityDuration as any)?.confidenceBandWidthDays)
+    const p50DurationDays = probabilityDuration?.p50
+    const p80DurationDays = probabilityDuration?.p80
+    const confidenceBandWidthDays = probabilityDuration
+      ? Math.max(0, probabilityDuration.p80 - probabilityDuration.p20)
+      : null
     const resourceClass = readTaskResourceClass(task)
     const resourceLimits = readTaskResourceLimits(task, resourceClass, projectResourceFacts)
     const resourceCapacity = resourceLimits?.parallelCapacity ?? null
@@ -1897,7 +1941,6 @@ function buildTaskNodes(
       duration,
       ...(p50DurationDays ? { p50DurationDays } : {}),
       ...(p80DurationDays ? { p80DurationDays } : {}),
-      ...(standardDeviationDays ? { standardDeviationDays } : {}),
       ...(confidenceBandWidthDays ? { confidenceBandWidthDays } : {}),
       startDate,
       endDate,
@@ -3138,13 +3181,15 @@ async function buildProjectCriticalPathSnapshotWithContext(
   constructionOrganizationLineage: ConstructionOrganizationPlanNetworkRuntimeLineage | null
 }> {
   const constructionCalendar = await resolveCriticalPathConstructionCalendar(projectId)
+  const calculatedAt = new Date().toISOString()
+  const durationAsOf = businessDateKey(new Date(calculatedAt), constructionCalendar?.timezone)
   const dependencyRows = await loadCriticalPathDependencyRows(projectId, rows)
   const constructionOrganizationLineage = readConstructionOrganizationLineageFromDependencyRows(dependencyRows)
   const currentForecasts = await loadCurrentForecastMapForCriticalPath(rows)
   const projectGenerationFacts = await loadCriticalPathProjectGenerationFacts(projectId)
   const projectResourceFacts = buildCriticalPathProjectResourceFacts(projectGenerationFacts)
   const t2RhythmScheduleCandidateNetworkEvidence = buildCriticalPathT2RhythmNetworkEvidence(projectGenerationFacts)
-  const taskNodes = buildTaskNodes(rows, currentForecasts, constructionCalendar, projectResourceFacts)
+  const taskNodes = buildTaskNodes(rows, currentForecasts, constructionCalendar, durationAsOf, projectResourceFacts)
   const semanticDependencyRows = buildSemanticDependencyRowsForCriticalPath(rows, dependencyRows, constructionCalendar)
   let analysis: CPMResult
   let hasCycleDetected = false
@@ -3288,8 +3333,6 @@ async function buildProjectCriticalPathSnapshotWithContext(
   }
     // CP14: displayTaskIds 仅包含客观关键路径（CPM 自动计算 + manual_insert），不混入 manual_attention
   const primaryChainIndex = new Map((primaryChain?.taskIds ?? []).map((taskId, index) => [taskId, index]))
-  const calculatedAt = new Date().toISOString()
-  const durationAsOf = businessDateKey(new Date(calculatedAt), constructionCalendar?.timezone)
   const productionDuration = (value: number | null | undefined) => (
     buildConstructionProductionDayDurationMetric(value, {
       asOf: durationAsOf,

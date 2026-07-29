@@ -7,6 +7,7 @@ import {
   getRegisteredPersistentJobNames,
   PersistentJobCatchUpCoordinator,
   runPersistentScheduledSlot,
+  type PersistentScheduledSlotExecutionContext,
   type ScheduledJobSlotClaim,
   type ScheduledJobSlotStore,
   PersistentWallClockJobTimer,
@@ -57,8 +58,15 @@ const expectedPersistentJobNames = [
 ].sort()
 
 class MemorySlotStore implements ScheduledJobSlotStore {
-  private rows = new Map<string, { status: 'running' | 'succeeded' | 'failed'; token: string }>()
+  private rows = new Map<string, {
+    status: 'running' | 'succeeded' | 'failed'
+    token: string
+    claimedAt: number
+  }>()
   claims: Array<{ jobName: string; scheduledFor: string }> = []
+  heartbeatCalls = 0
+  rejectHeartbeats = false
+  executionFenceCalls = 0
 
   async assertReady() {}
 
@@ -71,12 +79,29 @@ class MemorySlotStore implements ScheduledJobSlotStore {
   }): Promise<ScheduledJobSlotClaim> {
     const key = `${input.jobName}:${input.scheduledFor.toISOString()}`
     const current = this.rows.get(key)
-    if (current?.status === 'succeeded' || current?.status === 'running') {
+    if (current?.status === 'succeeded') {
       return { claimed: false, reason: current.status }
     }
-    this.rows.set(key, { status: 'running', token: input.claimToken })
+    if (current?.status === 'running' && Date.now() - current.claimedAt < input.staleAfterMs) {
+      return { claimed: false, reason: current.status }
+    }
+    this.rows.set(key, {
+      status: 'running',
+      token: input.claimToken,
+      claimedAt: Date.now(),
+    })
     this.claims.push({ jobName: input.jobName, scheduledFor: input.scheduledFor.toISOString() })
     return { claimed: true, claimToken: input.claimToken }
+  }
+
+  async heartbeat(input: { jobName: string; scheduledFor: Date; claimToken: string }) {
+    this.heartbeatCalls += 1
+    if (this.rejectHeartbeats) return false
+    const key = `${input.jobName}:${input.scheduledFor.toISOString()}`
+    const current = this.rows.get(key)
+    if (!current || current.token !== input.claimToken || current.status !== 'running') return false
+    this.rows.set(key, { ...current, claimedAt: Date.now() })
+    return true
   }
 
   async succeed(input: { jobName: string; scheduledFor: Date; claimToken: string }) {
@@ -93,6 +118,21 @@ class MemorySlotStore implements ScheduledJobSlotStore {
     if (!current || current.token !== input.claimToken || current.status !== 'running') return false
     this.rows.set(key, { ...current, status: 'failed' })
     return true
+  }
+
+  async runWithExecutionFence<T>(
+    _input: { jobName: string; scheduledFor: Date; claimToken: string },
+    runner: (context: { signal: AbortSignal; assertActive: () => void }) => Promise<T>,
+  ) {
+    this.executionFenceCalls += 1
+    const controller = new AbortController()
+    return {
+      acquired: true as const,
+      value: await runner({
+        signal: controller.signal,
+        assertActive: () => undefined,
+      }),
+    }
   }
 }
 
@@ -314,6 +354,222 @@ describe('persistent job schedule service', () => {
 
     releaseExecution?.()
     await expect(first).resolves.toMatchObject({ executed: true })
+  })
+
+  it('renews a long-running slot so a second worker cannot reclaim it after the stale window', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 6, 13, 10, 0, 0, 0))
+    const store = new MemorySlotStore()
+    let markStarted: (() => void) | null = null
+    let releaseExecution: (() => void) | null = null
+    const executionStarted = new Promise<void>((resolve) => {
+      markStarted = resolve
+    })
+    const execute = vi.fn()
+      .mockImplementationOnce(async () => {
+        markStarted?.()
+        await new Promise<void>((resolve) => {
+          releaseExecution = resolve
+        })
+      })
+      .mockResolvedValue(undefined)
+    const scheduledFor = new Date(2026, 6, 13, 10, 0, 0, 0)
+    const input = {
+      jobName: 'longRunningJob',
+      scheduledFor,
+      staleAfterMs: 90,
+      isCatchUp: true,
+    }
+    const first = runPersistentScheduledSlot(
+      { ...input, ownerId: 'worker-a' },
+      execute,
+      store,
+    )
+    const firstOutcome = first.then(
+      (value) => ({ value, error: null }),
+      (error: unknown) => ({ value: null, error }),
+    )
+    await executionStarted
+
+    await vi.advanceTimersByTimeAsync(120)
+    const duplicate = await runPersistentScheduledSlot(
+      { ...input, ownerId: 'worker-b' },
+      execute,
+      store,
+    )
+    releaseExecution?.()
+    const outcome = await firstOutcome
+
+    expect(duplicate).toEqual({ executed: false, reason: 'running' })
+    expect(execute).toHaveBeenCalledTimes(1)
+    expect(store.heartbeatCalls).toBeGreaterThan(0)
+    expect(outcome.error).toBeNull()
+    expect(outcome.value).toMatchObject({ executed: true })
+
+    const heartbeatCallsAfterSuccess = store.heartbeatCalls
+    await vi.advanceTimersByTimeAsync(180)
+    expect(store.heartbeatCalls).toBe(heartbeatCallsAfterSuccess)
+  })
+
+  it('aborts the stale worker before a reclaimed slot enters its mutation boundary', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 6, 13, 10, 0, 0, 0))
+    const store = new MemorySlotStore()
+    let markStarted: (() => void) | null = null
+    let releaseUnsignaledExecution: (() => void) | null = null
+    let firstWorkerActive = true
+    let firstSignal: AbortSignal | null = null
+    let secondWorkerObservedFirstActive: boolean | null = null
+    let executionCount = 0
+    const executionStarted = new Promise<void>((resolve) => {
+      markStarted = resolve
+    })
+    const execute = vi.fn(async (details: PersistentScheduledSlotExecutionContext) => {
+      executionCount += 1
+      if (executionCount === 1) {
+        firstSignal = details.signal ?? null
+        markStarted?.()
+        try {
+          if (firstSignal) {
+            await new Promise<void>((_resolve, reject) => {
+              firstSignal?.addEventListener('abort', () => reject(firstSignal?.reason), { once: true })
+            })
+          } else {
+            await new Promise<void>((resolve) => {
+              releaseUnsignaledExecution = resolve
+            })
+          }
+        } finally {
+          firstWorkerActive = false
+        }
+        return
+      }
+      secondWorkerObservedFirstActive = firstWorkerActive
+    })
+    const scheduledFor = new Date(2026, 6, 13, 10, 0, 0, 0)
+    const input = {
+      jobName: 'leaseLossJob',
+      scheduledFor,
+      staleAfterMs: 90,
+      isCatchUp: true,
+    }
+
+    const first = runPersistentScheduledSlot(
+      { ...input, ownerId: 'worker-a' },
+      execute,
+      store,
+    )
+    const firstOutcome = first.then(
+      (value) => ({ value, error: null }),
+      (error: unknown) => ({ value: null, error }),
+    )
+    await executionStarted
+    store.rejectHeartbeats = true
+
+    await vi.advanceTimersByTimeAsync(120)
+    const second = await runPersistentScheduledSlot(
+      { ...input, ownerId: 'worker-b' },
+      execute,
+      store,
+    )
+    releaseUnsignaledExecution?.()
+    await firstOutcome
+
+    expect(second).toMatchObject({ executed: true })
+    expect(firstSignal).toBeInstanceOf(AbortSignal)
+    expect(firstSignal?.aborted).toBe(true)
+    expect(secondWorkerObservedFirstActive).toBe(false)
+    expect(store.executionFenceCalls).toBe(2)
+  })
+
+  it('stops renewing a slot after the execution fails', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 6, 13, 10, 0, 0, 0))
+    const store = new MemorySlotStore()
+    let rejectExecution: ((error: Error) => void) | null = null
+    const execution = runPersistentScheduledSlot(
+      {
+        jobName: 'failedHeartbeatJob',
+        scheduledFor: new Date(2026, 6, 13, 10, 0, 0, 0),
+        ownerId: 'worker-a',
+        staleAfterMs: 90,
+        isCatchUp: true,
+      },
+      () => new Promise<void>((_resolve, reject) => {
+        rejectExecution = reject
+      }),
+      store,
+    )
+
+    await vi.advanceTimersByTimeAsync(60)
+    rejectExecution?.(new Error('controlled failure'))
+    await expect(execution).rejects.toThrow('controlled failure')
+    expect(store.heartbeatCalls).toBeGreaterThan(0)
+
+    const heartbeatCallsAfterFailure = store.heartbeatCalls
+    await vi.advanceTimersByTimeAsync(180)
+    expect(store.heartbeatCalls).toBe(heartbeatCallsAfterFailure)
+  })
+
+  it('keeps renewing an active slot after stop until execution settles', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 6, 13, 10, 5, 0, 0))
+    const store = new MemorySlotStore()
+    let markStarted: (() => void) | null = null
+    let releaseExecution: (() => void) | null = null
+    const executionStarted = new Promise<void>((resolve) => {
+      markStarted = resolve
+    })
+    const execute = vi.fn()
+      .mockImplementationOnce(async () => {
+        markStarted?.()
+        await new Promise<void>((resolve) => {
+          releaseExecution = resolve
+        })
+      })
+      .mockResolvedValue(undefined)
+    const onError = vi.fn()
+    const scheduledFor = new Date(2026, 6, 13, 10, 0, 0, 0)
+    const timer = new PersistentWallClockJobTimer({
+      jobName: 'stoppedHeartbeatJob',
+      schedule: { kind: 'hourly', minute: 0 },
+      execute,
+      store,
+      staleAfterMs: 90,
+      catchUp: { limit: 1, maxAgeMs: 2 * 60 * 60 * 1_000 },
+      onError,
+    })
+
+    timer.start()
+    await vi.advanceTimersByTimeAsync(0)
+    await executionStarted
+
+    timer.stop()
+    const heartbeatCallsAtStop = store.heartbeatCalls
+    await vi.advanceTimersByTimeAsync(120)
+    const duplicate = await runPersistentScheduledSlot(
+      {
+        jobName: 'stoppedHeartbeatJob',
+        scheduledFor,
+        ownerId: 'worker-b',
+        staleAfterMs: 90,
+        isCatchUp: true,
+      },
+      execute,
+      store,
+    )
+    const heartbeatCallsBeforeSettle = store.heartbeatCalls
+
+    releaseExecution?.()
+    await vi.advanceTimersByTimeAsync(0)
+    const heartbeatCallsAfterSettle = store.heartbeatCalls
+    await vi.advanceTimersByTimeAsync(180)
+
+    expect(duplicate).toEqual({ executed: false, reason: 'running' })
+    expect(execute).toHaveBeenCalledTimes(1)
+    expect(heartbeatCallsBeforeSettle).toBeGreaterThan(heartbeatCallsAtStop)
+    expect(onError).not.toHaveBeenCalled()
+    expect(store.heartbeatCalls).toBe(heartbeatCallsAfterSettle)
   })
 
   it('bounds catch-up concurrency across different jobs', async () => {

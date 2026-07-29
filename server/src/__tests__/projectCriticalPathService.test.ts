@@ -17,6 +17,20 @@ function productionDayMetric(value: number | null) {
   }
 }
 
+function availableProductionDayMetric(value: number, override: Record<string, unknown> = {}) {
+  return {
+    value,
+    unit: 'construction_production_day' as const,
+    calendarRef: 'work_calendar',
+    calendarVersion: 'calendar-v1',
+    timezone: 'Asia/Shanghai',
+    asOf: '2026-06-14',
+    availability: 'available' as const,
+    unavailableReason: null,
+    ...override,
+  }
+}
+
 const mocks = vi.hoisted(() => {
   const tables: Record<string, Row[]> = {
     tasks: [
@@ -1298,6 +1312,9 @@ describe('project critical path service', () => {
   })
 
   it('uses E2 remaining-duration forecasts for in-progress CPM task nodes', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-14T00:00:00.000Z'))
+    useAuthoritativeConstructionCalendar()
     mocks.tables.tasks = [
       {
         id: 'task-running',
@@ -1337,21 +1354,121 @@ describe('project critical path service', () => {
       {
         taskId: 'task-running',
         remainingDurationDays: 2,
+        remainingDuration: {
+          value: 2,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          asOf: '2026-06-14',
+          availability: 'available',
+          unavailableReason: null,
+        },
         forecastFinishDate: '2026-06-12',
       },
     ])
 
-    const result = await recalculateProjectCriticalPath('project-runtime')
+    try {
+      const result = await recalculateProjectCriticalPath('project-runtime')
 
-    expect(mocks.listCurrentTaskDurationForecasts).toHaveBeenCalledWith(
-      ['task-running', 'task-successor'],
-      expect.any(Object),
-    )
-    expect(result.projectDuration).toBe(7)
-    expect(result.snapshot.tasks.find((task) => task.taskId === 'task-running')?.durationDays).toBe(2)
+      expect(mocks.listCurrentTaskDurationForecasts).toHaveBeenCalledWith(
+        ['task-running', 'task-successor'],
+        expect.any(Object),
+      )
+      expect(result.projectDuration).toBe(7)
+      expect(result.snapshot.tasks.find((task) => task.taskId === 'task-running')?.durationDays).toBe(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('ignores a raw E2 remaining-duration alias when the typed fact is unavailable', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-14T00:00:00.000Z'))
+    useAuthoritativeConstructionCalendar()
+    mocks.tables.tasks = [
+      {
+        id: 'task-running',
+        project_id: 'project-runtime',
+        title: 'Running structure work',
+        start_date: '2026-06-01',
+        end_date: '2026-06-10',
+        planned_end_date: '2026-06-10',
+        status: 'in_progress',
+        progress: 70,
+        actual_start_date: '2026-06-01',
+      },
+    ]
+    mocks.tables.task_dependencies = []
+    mocks.listCurrentTaskDurationForecasts.mockResolvedValue([
+      {
+        taskId: 'task-running',
+        remainingDurationDays: 2,
+        remainingDuration: {
+          value: null,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          asOf: '2026-06-14',
+          availability: 'unavailable',
+          unavailableReason: 'duration_value_missing',
+        },
+      },
+    ])
+
+    try {
+      const result = await recalculateProjectCriticalPath('project-runtime')
+
+      expect(result.projectDuration).toBe(10)
+      expect(result.snapshot.tasks.find((task) => task.taskId === 'task-running')?.durationDays).toBe(10)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it.each([
+    ['wrong unit', { unit: 'calendar_day' }],
+    ['wrong calendar ref', { calendarRef: 'other_calendar' }],
+    ['wrong calendar version', { calendarVersion: 'calendar-v2' }],
+    ['wrong timezone', { timezone: 'UTC' }],
+    ['stale asOf', { asOf: '2026-06-13' }],
+  ])('rejects E2 remaining duration with %s', async (_label, override) => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-14T00:00:00.000Z'))
+    useAuthoritativeConstructionCalendar()
+    mocks.tables.tasks = [{
+      id: 'task-running',
+      project_id: 'project-runtime-identity',
+      title: 'Running structure work',
+      start_date: '2026-06-01',
+      end_date: '2026-06-10',
+      planned_end_date: '2026-06-10',
+      status: 'in_progress',
+      progress: 70,
+      actual_start_date: '2026-06-01',
+    }]
+    mocks.tables.task_dependencies = []
+    mocks.listCurrentTaskDurationForecasts.mockResolvedValue([{
+      taskId: 'task-running',
+      remainingDurationDays: 2,
+      remainingDuration: availableProductionDayMetric(2, override),
+    }])
+
+    try {
+      const result = await recalculateProjectCriticalPath('project-runtime-identity')
+
+      expect(result.projectDuration).toBe(10)
+      expect(result.snapshot.tasks.find((task) => task.taskId === 'task-running')?.durationDays).toBe(10)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('flags high-variance near-critical chains from E2 probability duration windows', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-14T00:00:00.000Z'))
+    useAuthoritativeConstructionCalendar()
     mocks.tables.tasks = [
       {
         id: 'main-critical',
@@ -1381,43 +1498,260 @@ describe('project critical path service', () => {
       {
         taskId: 'main-critical',
         remainingDurationDays: 10,
+        remainingDuration: {
+          value: 10,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          asOf: '2026-06-14',
+          availability: 'available',
+          unavailableReason: null,
+        },
         probabilityDuration: {
           p50RemainingDays: 10,
           p80RemainingDays: 11,
           standardDeviationDays: 1,
           confidenceBandWidthDays: 1,
         },
+        probabilityDurationMetrics: {
+          p20RemainingDuration: {
+            value: 9,
+            unit: 'construction_production_day',
+            calendarRef: 'work_calendar',
+            calendarVersion: 'calendar-v1',
+            timezone: 'Asia/Shanghai',
+            asOf: '2026-06-14',
+            availability: 'available',
+            unavailableReason: null,
+          },
+          p50RemainingDuration: {
+            value: 10,
+            unit: 'construction_production_day',
+            calendarRef: 'work_calendar',
+            calendarVersion: 'calendar-v1',
+            timezone: 'Asia/Shanghai',
+            asOf: '2026-06-14',
+            availability: 'available',
+            unavailableReason: null,
+          },
+          p80RemainingDuration: {
+            value: 11,
+            unit: 'construction_production_day',
+            calendarRef: 'work_calendar',
+            calendarVersion: 'calendar-v1',
+            timezone: 'Asia/Shanghai',
+            asOf: '2026-06-14',
+            availability: 'available',
+            unavailableReason: null,
+          },
+        },
       },
       {
         taskId: 'near-critical-variable',
         remainingDurationDays: 9,
+        remainingDuration: {
+          value: 9,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          asOf: '2026-06-14',
+          availability: 'available',
+          unavailableReason: null,
+        },
         probabilityDuration: {
           p50RemainingDays: 9,
           p80RemainingDays: 16,
           standardDeviationDays: 4,
           confidenceBandWidthDays: 7,
         },
+        probabilityDurationMetrics: {
+          p20RemainingDuration: {
+            value: 7,
+            unit: 'construction_production_day',
+            calendarRef: 'work_calendar',
+            calendarVersion: 'calendar-v1',
+            timezone: 'Asia/Shanghai',
+            asOf: '2026-06-14',
+            availability: 'available',
+            unavailableReason: null,
+          },
+          p50RemainingDuration: {
+            value: 9,
+            unit: 'construction_production_day',
+            calendarRef: 'work_calendar',
+            calendarVersion: 'calendar-v1',
+            timezone: 'Asia/Shanghai',
+            asOf: '2026-06-14',
+            availability: 'available',
+            unavailableReason: null,
+          },
+          p80RemainingDuration: {
+            value: 16,
+            unit: 'construction_production_day',
+            calendarRef: 'work_calendar',
+            calendarVersion: 'calendar-v1',
+            timezone: 'Asia/Shanghai',
+            asOf: '2026-06-14',
+            availability: 'available',
+            unavailableReason: null,
+          },
+        },
       },
     ])
 
-    const snapshot = await getProjectCriticalPathSnapshot('project-variance')
+    try {
+      const snapshot = await getProjectCriticalPathSnapshot('project-variance')
 
-    const nearCriticalTask = snapshot.tasks.find((task) => task.taskId === 'near-critical-variable') as any
-    expect(nearCriticalTask).toEqual(expect.objectContaining({
-      isAutoCritical: false,
-      isHighVarianceNearCritical: true,
-      p80DurationDays: 16,
-      standardDeviationDays: 4,
-    }))
-    expect(snapshot.alternateChains).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        source: 'auto',
-        taskIds: ['near-critical-variable'],
-        totalDurationDays: 9,
-        p80DurationDays: 16,
+      const nearCriticalTask = snapshot.tasks.find((task) => task.taskId === 'near-critical-variable') as any
+      expect(nearCriticalTask).toEqual(expect.objectContaining({
+        isAutoCritical: false,
         isHighVarianceNearCritical: true,
-      }),
-    ]))
+        p80DurationDays: 16,
+      }))
+      expect(snapshot.alternateChains).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          source: 'auto',
+          taskIds: ['near-critical-variable'],
+          totalDurationDays: 9,
+          p80DurationDays: 16,
+          isHighVarianceNearCritical: true,
+        }),
+      ]))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not flag high-variance chains from legacy probability fields when typed metrics are unavailable', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-14T00:00:00.000Z'))
+    useAuthoritativeConstructionCalendar()
+    mocks.tables.tasks = [
+      {
+        id: 'main-critical',
+        project_id: 'project-variance-unavailable',
+        title: 'Main critical chain',
+        start_date: '2026-06-01',
+        end_date: '2026-06-10',
+        planned_end_date: '2026-06-10',
+        status: 'in_progress',
+        progress: 50,
+        actual_start_date: '2026-06-01',
+      },
+      {
+        id: 'near-critical-variable',
+        project_id: 'project-variance-unavailable',
+        title: 'Near critical high variance work',
+        start_date: '2026-06-01',
+        end_date: '2026-06-09',
+        planned_end_date: '2026-06-09',
+        status: 'in_progress',
+        progress: 50,
+        actual_start_date: '2026-06-01',
+      },
+    ]
+    mocks.tables.task_dependencies = []
+    mocks.listCurrentTaskDurationForecasts.mockResolvedValue([
+      {
+        taskId: 'main-critical',
+        probabilityDuration: { p50RemainingDays: 10, p80RemainingDays: 11 },
+        probabilityDurationMetrics: {
+          p20RemainingDuration: { value: null, unit: 'construction_production_day', availability: 'unavailable' },
+          p50RemainingDuration: { value: null, unit: 'construction_production_day', availability: 'unavailable' },
+          p80RemainingDuration: { value: null, unit: 'construction_production_day', availability: 'unavailable' },
+        },
+      },
+      {
+        taskId: 'near-critical-variable',
+        probabilityDuration: { p50RemainingDays: 9, p80RemainingDays: 30, confidenceBandWidthDays: 21 },
+        probabilityDurationMetrics: {
+          p20RemainingDuration: { value: null, unit: 'construction_production_day', availability: 'unavailable' },
+          p50RemainingDuration: { value: null, unit: 'construction_production_day', availability: 'unavailable' },
+          p80RemainingDuration: { value: null, unit: 'construction_production_day', availability: 'unavailable' },
+        },
+      },
+    ] as any)
+
+    try {
+      const snapshot = await getProjectCriticalPathSnapshot('project-variance-unavailable')
+
+      expect(snapshot.tasks.find((task) => task.taskId === 'near-critical-variable')).not.toEqual(expect.objectContaining({
+        isHighVarianceNearCritical: true,
+      }))
+      expect(snapshot.alternateChains).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ taskIds: ['near-critical-variable'], isHighVarianceNearCritical: true }),
+      ]))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it.each([
+    ['P20 exceeds P50', 16, 9, 30],
+    ['P50 exceeds P80', 7, 16, 15],
+  ])('does not publish or arbitrate inverted typed probability percentiles when %s', async (_label, p20, p50, p80) => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-14T00:00:00.000Z'))
+    useAuthoritativeConstructionCalendar()
+    mocks.tables.tasks = [
+      {
+        id: 'main-critical',
+        project_id: 'project-variance-inverted',
+        title: 'Main critical chain',
+        start_date: '2026-06-01',
+        end_date: '2026-06-10',
+        planned_end_date: '2026-06-10',
+        status: 'in_progress',
+        progress: 50,
+        actual_start_date: '2026-06-01',
+      },
+      {
+        id: 'near-critical-variable',
+        project_id: 'project-variance-inverted',
+        title: 'Near critical invalid percentile work',
+        start_date: '2026-06-01',
+        end_date: '2026-06-09',
+        planned_end_date: '2026-06-09',
+        status: 'in_progress',
+        progress: 50,
+        actual_start_date: '2026-06-01',
+      },
+    ]
+    mocks.tables.task_dependencies = []
+    mocks.listCurrentTaskDurationForecasts.mockResolvedValue([
+      {
+        taskId: 'main-critical',
+        remainingDuration: availableProductionDayMetric(10),
+      },
+      {
+        taskId: 'near-critical-variable',
+        remainingDuration: availableProductionDayMetric(9),
+        probabilityDuration: {
+          p50RemainingDays: 9,
+          p80RemainingDays: 30,
+          confidenceBandWidthDays: 21,
+        },
+        probabilityDurationMetrics: {
+          p20RemainingDuration: availableProductionDayMetric(p20),
+          p50RemainingDuration: availableProductionDayMetric(p50),
+          p80RemainingDuration: availableProductionDayMetric(p80),
+        },
+      },
+    ] as any)
+
+    try {
+      const snapshot = await getProjectCriticalPathSnapshot('project-variance-inverted')
+      const task = snapshot.tasks.find((item) => item.taskId === 'near-critical-variable') as any
+
+      expect(task).toBeUndefined()
+      expect(snapshot.alternateChains).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ taskIds: ['near-critical-variable'], isHighVarianceNearCritical: true }),
+      ]))
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('uses construction production days for planned CPM task durations', async () => {

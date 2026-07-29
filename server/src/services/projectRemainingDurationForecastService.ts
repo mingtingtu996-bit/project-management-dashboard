@@ -34,6 +34,7 @@ import {
   buildConstructionProductionDayDurationMetric,
   businessDateKey,
   hasIdentifiedConstructionCalendar,
+  normalizeDurationMetricDto,
   type DurationMetricDto,
 } from './durationMetricService.js'
 import {
@@ -298,36 +299,6 @@ function firstProjectId(rows: ScheduleAccelerationRow[]) {
   return null
 }
 
-function readRowForecastFinish(row: ScheduleAccelerationRow) {
-  return normalizeDate(
-    row.values.forecast_finish_date
-      ?? row.values.forecastFinishDate
-      ?? row.values.duration_forecast_finish_date
-      ?? readRecord(row.values.durationForecast).forecastFinishDate
-      ?? readRecord(row.values.duration_forecast).forecast_finish_date
-  )
-}
-
-function readRowConfidenceBandFinish(row: ScheduleAccelerationRow) {
-  return normalizeDate(
-    row.values.forecast_p80_finish_date
-      ?? row.values.forecastP80FinishDate
-      ?? row.values.forecast_confidence_band_finish_date
-      ?? readRecord(row.values.durationForecast).forecastP80FinishDate
-      ?? readRecord(row.values.duration_forecast).forecast_p80_finish_date,
-  )
-}
-
-function readRowOptimisticBandFinish(row: ScheduleAccelerationRow) {
-  return normalizeDate(
-    row.values.forecast_p20_finish_date
-      ?? row.values.forecastP20FinishDate
-      ?? row.values.forecast_optimistic_band_finish_date
-      ?? readRecord(row.values.durationForecast).forecastP20FinishDate
-      ?? readRecord(row.values.duration_forecast).forecast_p20_finish_date,
-  )
-}
-
 function addProductionDaysOrNull(
   date: string | null | undefined,
   days: number | null | undefined,
@@ -347,10 +318,10 @@ function orderCriticalBandFinishDates(
   confidenceBandFinishDate: string | null
   warnings: DurationPlausibilityWarning[]
 } {
-  const medianFinish = readRowGoverningFinish(row, asOfDate, calendar)
-  const optimisticFinish = readRowOptimisticBandFinish(row)
-  const confidenceFinish = readRowConfidenceBandFinish(row)
-  if (!medianFinish && !optimisticFinish && !confidenceFinish) {
+  const probability = readRowProbabilityDurationMetrics(row, asOfDate, calendar)
+  const governingFinish = readRowGoverningFinish(row, asOfDate, calendar)
+  const governingDays = governingFinish ? projectRemainingDurationDays(asOfDate, governingFinish, calendar) : null
+  if (!governingFinish && !probability) {
     return {
       optimisticBandFinishDate: null,
       medianFinishDate: null,
@@ -358,42 +329,57 @@ function orderCriticalBandFinishDates(
       warnings: [],
     }
   }
-  const optimisticDays = optimisticFinish ? projectRemainingDurationDays(asOfDate, optimisticFinish, calendar) : null
-  const medianDays = medianFinish ? projectRemainingDurationDays(asOfDate, medianFinish, calendar) : null
-  const confidenceDays = confidenceFinish ? projectRemainingDurationDays(asOfDate, confidenceFinish, calendar) : null
   const ordered = orderDurationBand({
     engineCode: 'project_remaining_forecast',
-    p20Days: optimisticDays,
-    p50Days: medianDays,
-    p80Days: confidenceDays,
+    p20Days: probability?.p20 ?? null,
+    p50Days: probability?.p50 ?? governingDays,
+    p80Days: probability?.p80 ?? null,
     taskId: row.clientRowId,
   })
   return {
     optimisticBandFinishDate: addProductionDaysOrNull(asOfDate, ordered.band.p20Days, calendar),
-    medianFinishDate: addProductionDaysOrNull(asOfDate, ordered.band.p50Days, calendar) ?? medianFinish,
+    medianFinishDate: addProductionDaysOrNull(asOfDate, ordered.band.p50Days, calendar) ?? governingFinish,
     confidenceBandFinishDate: addProductionDaysOrNull(asOfDate, ordered.band.p80Days, calendar),
     warnings: ordered.warnings,
   }
 }
 
-function readRowRemainingDurationDays(row: ScheduleAccelerationRow) {
-  return readNumber(
-    row.values.remaining_duration_days
-      ?? row.values.remainingDurationDays
-      ?? row.values.forecast_remaining_days
-      ?? row.values.duration_forecast_remaining_days
-      ?? readRecord(row.values.durationForecast).remainingDurationDays
-      ?? readRecord(row.values.duration_forecast).remaining_duration_days,
+function readRowRemainingDurationDays(
+  row: ScheduleAccelerationRow,
+  asOfDate: string,
+  calendar?: ConstructionCalendarContext | null,
+) {
+  const durationForecast = readRecord(row.values.durationForecast)
+  const snakeDurationForecast = readRecord(row.values.duration_forecast)
+  return readMatchingProductionDurationMetric(
+    row.values.remaining_duration
+      ?? row.values.remainingDuration
+      ?? durationForecast.remainingDuration
+      ?? durationForecast.remaining_duration
+      ?? snakeDurationForecast.remainingDuration
+      ?? snakeDurationForecast.remaining_duration,
+    asOfDate,
+    calendar,
   )
 }
 
-function readRowCriticalPathSpanDays(row: ScheduleAccelerationRow) {
-  return readNumber(
-    row.values.critical_path_span_days
-      ?? row.values.criticalPathSpanDays
-      ?? readRecord(row.values.durationForecast).criticalPathSpanDays
-      ?? readRecord(row.values.duration_forecast).critical_path_span_days,
-  )
+function readMatchingProductionDurationMetric(
+  value: unknown,
+  asOfDate: string,
+  calendar?: ConstructionCalendarContext | null,
+) {
+  if (!isAuthoritativeConstructionCalendar(calendar)) return null
+  const metric = normalizeDurationMetricDto(value)
+  if (
+    !metric
+    || metric.availability !== 'available'
+    || metric.unit !== 'construction_production_day'
+    || metric.calendarRef !== calendar.calendarRef
+    || metric.calendarVersion !== calendar.calendarVersion
+    || metric.timezone !== calendar.timezone
+    || metric.asOf !== asOfDate
+  ) return null
+  return readNumber(metric.value)
 }
 
 function readRowGoverningFinish(
@@ -401,12 +387,10 @@ function readRowGoverningFinish(
   asOfDate?: string | null,
   calendar?: ConstructionCalendarContext | null,
 ) {
-  const forecastFinish = readRowForecastFinish(row)
-  if (forecastFinish) return forecastFinish
-
-  const remainingDays = readRowRemainingDurationDays(row)
-  if (remainingDays !== null && remainingDays > 0 && normalizeDate(asOfDate)) {
-    return addProductionDays(asOfDate, remainingDays, calendar)
+  const normalizedAsOf = normalizeDate(asOfDate)
+  const remainingDays = readRowRemainingDurationDays(row, normalizedAsOf ?? '', calendar)
+  if (remainingDays !== null && remainingDays > 0 && normalizedAsOf) {
+    return addProductionDays(normalizedAsOf, remainingDays, calendar)
   }
 
   return normalizeDate(
@@ -523,21 +507,16 @@ function readExternalGateFinishDate(
   asOfDate: string,
   calendar?: ConstructionCalendarContext | null,
 ) {
-  const explicitFinishDate = normalizeDate(
-    row.values.forecast_finish_date
-      ?? row.values.forecastFinishDate
-      ?? row.values.duration_forecast_finish_date
-      ?? readRecord(row.values.durationForecast).forecastFinishDate
-      ?? readRecord(row.values.duration_forecast).forecast_finish_date
-      ?? row.values.planned_finish_date
-      ?? row.values.planned_end_date
-      ?? row.values.end_date,
-  )
-  const remainingDays = readRowRemainingDurationDays(row)
+  const remainingDays = readRowRemainingDurationDays(row, asOfDate, calendar)
   const remainingFinishDate = remainingDays !== null && remainingDays > 0
     ? addProductionDays(asOfDate, remainingDays, calendar)
     : null
-  return latestDate([explicitFinishDate, remainingFinishDate])
+  const plannedFinishDate = normalizeDate(
+    row.values.planned_finish_date
+      ?? row.values.planned_end_date
+      ?? row.values.end_date,
+  )
+  return latestDate([plannedFinishDate, remainingFinishDate])
 }
 
 function readExternalGateRemainingDays(
@@ -545,7 +524,7 @@ function readExternalGateRemainingDays(
   asOfDate: string,
   calendar?: ConstructionCalendarContext | null,
 ) {
-  const explicitRemainingDays = readRowRemainingDurationDays(row)
+  const explicitRemainingDays = readRowRemainingDurationDays(row, asOfDate, calendar)
   if (explicitRemainingDays !== null && explicitRemainingDays > 0) return Math.ceil(explicitRemainingDays)
 
   const finishDate = readRowGoverningFinish(row, asOfDate, calendar)
@@ -557,14 +536,20 @@ function readExternalGateRemainingDays(
   return projectRemainingDurationDays(startDate, finishDate, calendar)
 }
 
-function readExplicitExternalGateFinishDate(row: ScheduleAccelerationRow) {
+function readTypedExternalGateRemainingDays(
+  row: ScheduleAccelerationRow,
+  asOfDate: string,
+  calendar?: ConstructionCalendarContext | null,
+) {
+  const remainingDays = readRowRemainingDurationDays(row, asOfDate, calendar)
+  return remainingDays !== null && remainingDays > 0 ? Math.ceil(remainingDays) : 0
+}
+
+function readExplicitExternalGateFinishDate(
+  row: ScheduleAccelerationRow,
+) {
   return normalizeDate(
-    row.values.forecast_finish_date
-      ?? row.values.forecastFinishDate
-      ?? row.values.duration_forecast_finish_date
-      ?? readRecord(row.values.durationForecast).forecastFinishDate
-      ?? readRecord(row.values.duration_forecast).forecast_finish_date
-      ?? row.values.planned_finish_date
+    row.values.planned_finish_date
       ?? row.values.planned_end_date
       ?? row.values.end_date,
   )
@@ -578,11 +563,10 @@ function computeCriticalMergeBiasDays(
   const evaluatedCriticalChainCount = rows.length
   const spreads = rows
     .map((row) => {
-      const medianFinish = readRowGoverningFinish(row, asOfDate, calendar)
-      const confidenceFinish = readRowConfidenceBandFinish(row)
-      if (!medianFinish || !confidenceFinish) return null
-      const spread = projectRemainingGapDays(medianFinish, confidenceFinish, calendar)
-      return spread !== null && spread > 0 ? spread : null
+      const probability = readRowProbabilityDurationMetrics(row, asOfDate, calendar)
+      if (!probability) return null
+      const spread = probability.p80 - probability.p50
+      return spread > 0 ? spread : null
     })
     .filter((value): value is number => value !== null)
 
@@ -607,34 +591,51 @@ function computeCriticalMergeBiasDays(
   }
 }
 
-function readRowProbabilityDuration(row: ScheduleAccelerationRow) {
+function readRowProbabilityDurationMetricsRecord(row: ScheduleAccelerationRow) {
   const durationForecast = readRecord(row.values.durationForecast)
   const snakeDurationForecast = readRecord(row.values.duration_forecast)
   return readRecord(
-    row.values.probabilityDuration
-      ?? row.values.probability_duration
-      ?? durationForecast.probabilityDuration
-      ?? durationForecast.probability_duration
-      ?? snakeDurationForecast.probabilityDuration
-      ?? snakeDurationForecast.probability_duration,
+    row.values.probabilityDurationMetrics
+      ?? row.values.probability_duration_metrics
+      ?? durationForecast.probabilityDurationMetrics
+      ?? durationForecast.probability_duration_metrics
+      ?? snakeDurationForecast.probabilityDurationMetrics
+      ?? snakeDurationForecast.probability_duration_metrics,
   )
 }
 
-function readRowProbabilityRemainingDays(
+function readRowProbabilityDurationMetrics(
   row: ScheduleAccelerationRow,
-  percentile: 'p20' | 'p50' | 'p80',
+  asOfDate: string,
+  calendar?: ConstructionCalendarContext | null,
 ) {
-  const probability = readRowProbabilityDuration(row)
-  const keys = percentile === 'p20'
-    ? ['p20RemainingDays', 'p20_remaining_days']
-    : percentile === 'p50'
-      ? ['p50RemainingDays', 'p50_remaining_days']
-      : ['p80RemainingDays', 'p80_remaining_days']
-  for (const key of keys) {
-    const value = readNumber(probability[key])
-    if (value !== null && value > 0) return value
-  }
-  return percentile === 'p50' ? readRowRemainingDurationDays(row) : null
+  const probability = readRowProbabilityDurationMetricsRecord(row)
+  const p20 = readMatchingProductionDurationMetric(
+    probability.p20RemainingDuration ?? probability.p20_remaining_duration,
+    asOfDate,
+    calendar,
+  )
+  const p50 = readMatchingProductionDurationMetric(
+    probability.p50RemainingDuration ?? probability.p50_remaining_duration,
+    asOfDate,
+    calendar,
+  )
+  const p80 = readMatchingProductionDurationMetric(
+    probability.p80RemainingDuration ?? probability.p80_remaining_duration,
+    asOfDate,
+    calendar,
+  )
+  if (
+    p20 === null
+    || p50 === null
+    || p80 === null
+    || p20 <= 0
+    || p50 <= 0
+    || p80 <= 0
+    || p20 > p50
+    || p50 > p80
+  ) return null
+  return { p20, p50, p80 }
 }
 
 function releaseOffsetDays(
@@ -654,13 +655,16 @@ function buildNetworkProbability(params: {
   calendar?: ConstructionCalendarContext | null
 }) {
   const rowIds = new Set(params.rows.map((row) => row.clientRowId))
-  const tasks = params.rows.map((row) => ({
-    id: row.clientRowId,
-    p20Days: readRowProbabilityRemainingDays(row, 'p20'),
-    p50Days: readRowProbabilityRemainingDays(row, 'p50'),
-    p80Days: readRowProbabilityRemainingDays(row, 'p80'),
-    releaseOffsetDays: releaseOffsetDays(row, params.asOfDate, params.calendar),
-  }))
+  const tasks = params.rows.map((row) => {
+    const probability = readRowProbabilityDurationMetrics(row, params.asOfDate, params.calendar)
+    return {
+      id: row.clientRowId,
+      p20Days: probability?.p20 ?? null,
+      p50Days: probability?.p50 ?? null,
+      p80Days: probability?.p80 ?? null,
+      releaseOffsetDays: releaseOffsetDays(row, params.asOfDate, params.calendar),
+    }
+  })
   const dependencies = params.rows.flatMap((row) => row.predecessorDependencies
     .filter((dependency) => rowIds.has(dependency.clientRowId))
     .map((dependency) => ({
@@ -1114,16 +1118,15 @@ export function buildProjectRemainingDurationForecast(params: {
   const latestCriticalFinishDate = latestDate(internalCriticalRows.map((row) => readRowGoverningFinish(row, asOfDate, constructionCalendar)))
   const optimisticBandFinishDate = latestDate(criticalBandOrders.map((item) => item.optimisticBandFinishDate))
   const confidenceBandFinishDate = latestDate(criticalBandOrders.map((item) => item.confidenceBandFinishDate))
-  const criticalPathSpanDays = internalCriticalRows
-    .map(readRowCriticalPathSpanDays)
-    .filter((days): days is number => days !== null && days > 0)
-  const criticalPathSpanFinishDate = criticalPathSpanDays.length > 0
-    ? addProductionDays(asOfDate, Math.max(...criticalPathSpanDays), constructionCalendar)
-    : null
-  const latestGateFinishDate = latestDate(externalGateRows.map((row) => readExternalGateFinishDate(row, asOfDate, constructionCalendar)))
+  const criticalPathSpanFinishDate: string | null = null
+  const latestAbsoluteGateFinishDate = latestDate(externalGateRows.map((row) => readExternalGateFinishDate(row, asOfDate, constructionCalendar)))
   const latestParallelGateFinishDate = latestDate(parallelGateRows.map((row) => readExternalGateFinishDate(row, asOfDate, constructionCalendar)))
   const latestStartGateFinishDate = latestDate(startGateRows.map((row) => readExternalGateFinishDate(row, asOfDate, constructionCalendar)))
-  const latestFinishGateFinishDate = latestDate(finishGateRows.map((row) => readExplicitExternalGateFinishDate(row)))
+  const latestFinishGateFinishDate = latestDate(finishGateRows.map((row) => (
+    readExplicitExternalGateFinishDate(row)
+      ? readExternalGateFinishDate(row, asOfDate, constructionCalendar)
+      : null
+  )))
   const latestCommitmentFinishDate = normalizeDate(monthlyCommitments.latestCommitmentFinishDate)
   const networkProbabilityResult = buildNetworkProbability({
     rows: internalRemainingRows,
@@ -1182,12 +1185,18 @@ export function buildProjectRemainingDurationForecast(params: {
     .map((row) => readExternalGateRemainingDays(row, asOfDate, constructionCalendar))
     .filter((days) => days > 0)
   const finishGateRemainingDays = finishGateRows
-    .filter((row) => !readExplicitExternalGateFinishDate(row))
-    .map((row) => readExternalGateRemainingDays(row, asOfDate, constructionCalendar))
+    .map((row) => (
+      readExplicitExternalGateFinishDate(row)
+        ? readTypedExternalGateRemainingDays(row, asOfDate, constructionCalendar)
+        : readExternalGateRemainingDays(row, asOfDate, constructionCalendar)
+    ))
     .filter((days) => days > 0)
   const handoverGateRemainingDays = handoverGateRows
-    .filter((row) => !readExplicitExternalGateFinishDate(row))
-    .map((row) => readExternalGateRemainingDays(row, asOfDate, constructionCalendar))
+    .map((row) => (
+      readExplicitExternalGateFinishDate(row)
+        ? readTypedExternalGateRemainingDays(row, asOfDate, constructionCalendar)
+        : readExternalGateRemainingDays(row, asOfDate, constructionCalendar)
+    ))
     .filter((days) => days > 0)
   const overlappedRemainingDays = parallelGateRemainingDays.length > 0
     ? Math.max(...parallelGateRemainingDays)
@@ -1206,13 +1215,24 @@ export function buildProjectRemainingDurationForecast(params: {
       ? addProductionDays(internalWorkFinishDate, Math.max(...finishGateRemainingDays), constructionCalendar)
       : null,
   ])
-  const latestHandoverGateFinishDate = latestDate(handoverGateRows.map((row) => readExplicitExternalGateFinishDate(row)))
+  const latestHandoverGateFinishDate = latestDate(handoverGateRows.map((row) => (
+    readExplicitExternalGateFinishDate(row)
+      ? readExternalGateFinishDate(row, asOfDate, constructionCalendar)
+      : null
+  )))
   const handoverBaseFinishDate = latestDate([finishGateFinishDate, internalWorkFinishDate])
   const handoverGateFinishDate = latestDate([
     latestHandoverGateFinishDate,
     handoverBaseFinishDate && handoverGateRemainingDays.length > 0
       ? addProductionDays(handoverBaseFinishDate, Math.max(...handoverGateRemainingDays), constructionCalendar)
       : null,
+  ])
+  const latestGateFinishDate = latestDate([
+    latestAbsoluteGateFinishDate,
+    parallelGateFinishDate,
+    startGateFinishDate,
+    finishGateFinishDate,
+    handoverGateFinishDate,
   ])
   const serializedGateFinishCandidate = latestDate([finishGateFinishDate, handoverGateFinishDate])
   const gateTailDaysAfterInternal = internalWorkFinishDate && serializedGateFinishCandidate

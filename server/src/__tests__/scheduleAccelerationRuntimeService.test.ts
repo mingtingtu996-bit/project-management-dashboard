@@ -79,6 +79,7 @@ const { buildTaskCommitRequestHash } = await import('../services/taskCommitIdemp
 function buildAvailableDurationMetric(
   value: number,
   unit: 'calendar_day' | 'construction_production_day',
+  asOf = '2027-02-15',
 ) {
   return {
     value,
@@ -86,7 +87,7 @@ function buildAvailableDurationMetric(
     calendarRef: unit === 'calendar_day' ? 'gregorian' : 'work_calendar',
     calendarVersion: unit === 'calendar_day' ? 'ISO-8601' : 'calendar-v1',
     timezone: 'Asia/Shanghai',
-    asOf: '2027-02-15',
+    asOf,
     availability: 'available' as const,
     unavailableReason: null,
   }
@@ -775,6 +776,41 @@ describe('scheduleAccelerationRuntimeService', () => {
     expect(mocks.backtestEarliestPendingDurationAccuracyPrediction).not.toHaveBeenCalled()
   })
 
+  it('rejects an available remaining metric with the wrong unit when no dated runtime fact exists', async () => {
+    mocks.getTasks.mockResolvedValue([{
+      id: 'task-wrong-duration-unit',
+      project_id: 'project-1',
+      title: 'Undated runtime task',
+      planned_start_date: null,
+      planned_end_date: null,
+      start_date: null,
+      end_date: null,
+      actual_start_date: null,
+      actual_end_date: null,
+      status: 'in_progress',
+      progress: 40,
+      standard_task_metadata: {
+        durationContributionMode: 'duration_bearing',
+        rowProjectionMode: 'schedule_row',
+      },
+    }])
+    mocks.listCurrentTaskDurationForecasts.mockResolvedValue([{
+      taskId: 'task-wrong-duration-unit',
+      remainingDuration: buildAvailableDurationMetric(5, 'calendar_day', '2026-06-10'),
+    }] as any)
+
+    await expect(buildRuntimeProjectRemainingDurationForecast({
+      projectId: 'project-1',
+      asOfDate: '2026-06-10',
+    })).rejects.toMatchObject({
+      code: 'PROJECT_REMAINING_FORECAST_UNAVAILABLE',
+      operation: 'runtime_remaining_forecast_evidence',
+    })
+
+    expect(mocks.recordDurationAccuracyPrediction).not.toHaveBeenCalled()
+    expect(mocks.backtestEarliestPendingDurationAccuracyPrediction).not.toHaveBeenCalled()
+  })
+
   it('normalizes DB circuit failures during runtime task reads as forecast unavailable', async () => {
     mocks.getTasks.mockRejectedValue(new Error('dbService.getTasks REST page 1 skipped because Supabase REST circuit is open'))
 
@@ -998,6 +1034,7 @@ describe('scheduleAccelerationRuntimeService', () => {
       {
         taskId: 'shutdown-sensitive',
         remainingDurationDays: 2,
+        remainingDuration: buildAvailableDurationMetric(2, 'construction_production_day', '2026-02-14'),
       },
     ])
     mocks.executeSQL.mockImplementation(async (sql: string) => {
@@ -1079,6 +1116,7 @@ describe('scheduleAccelerationRuntimeService', () => {
       {
         taskId: 'shutdown-sensitive',
         remainingDurationDays: 2,
+        remainingDuration: buildAvailableDurationMetric(2, 'construction_production_day', '2026-02-14'),
       },
     ])
     mocks.executeSQL.mockImplementation(async (sql: string) => {
@@ -2222,7 +2260,7 @@ describe('scheduleAccelerationRuntimeService', () => {
     expect(result.projectRemainingForecast.calculationContext.criticalPath.remainingTaskCount).toBe(1)
   })
 
-  it('hydrates runtime rows from E3 critical snapshot and E2 forecast finish before building E4 project remaining forecast', async () => {
+  it('hydrates runtime rows from E3 critical snapshot and exact typed E2 remaining duration', async () => {
     mocks.getTasks.mockResolvedValue([
       {
         id: 'task-from-e3',
@@ -2258,6 +2296,7 @@ describe('scheduleAccelerationRuntimeService', () => {
       {
         taskId: 'task-from-e3',
         remainingDurationDays: 4,
+        remainingDuration: buildAvailableDurationMetric(4, 'construction_production_day', '2026-06-10'),
         forecastFinishDate: '2026-06-26',
       },
     ])
@@ -2280,12 +2319,122 @@ describe('scheduleAccelerationRuntimeService', () => {
     })
     expect(result.projectRemainingForecast.calculationContext.criticalPath).toEqual(expect.objectContaining({
       remainingTaskCount: 1,
-      latestCriticalFinishDate: '2026-06-26',
+      latestCriticalFinishDate: '2026-06-13',
     }))
-    expect(result.projectRemainingForecast.forecastFinishDate).toBe('2026-06-26')
+    expect(result.projectRemainingForecast.forecastFinishDate).toBe('2026-06-13')
   })
 
-  it('hydrates E3 primary chain span into E4 critical-path span finish', async () => {
+  it('reuses one E3 snapshot for both E4 context and acceleration selection', async () => {
+    mocks.getTasks.mockResolvedValue([
+      {
+        id: 'snapshot-critical',
+        project_id: 'project-1',
+        title: 'Current E3 critical work',
+        planned_start_date: '2026-01-01',
+        planned_end_date: '2026-01-20',
+        status: 'todo',
+        progress: 0,
+        is_critical: false,
+        total_float_days: 25,
+        free_float_days: 12,
+        standard_task_metadata: {
+          durationContributionMode: 'duration_bearing',
+          rowProjectionMode: 'schedule_row',
+          resourceProfile: { resourceClass: 'rebar' },
+          executionPhase: 'superstructure',
+        },
+      },
+      {
+        id: 'snapshot-omitted-stale-float',
+        project_id: 'project-1',
+        title: 'Task omitted by current E3 snapshot',
+        planned_start_date: '2026-01-01',
+        planned_end_date: '2026-03-31',
+        status: 'todo',
+        progress: 0,
+        is_critical: false,
+        total_float_days: 2,
+        free_float_days: 1,
+        standard_task_metadata: {
+          durationContributionMode: 'duration_bearing',
+          rowProjectionMode: 'schedule_row',
+          criticalPathEligible: true,
+          resourceProfile: { resourceClass: 'electrical' },
+          executionPhase: 'superstructure',
+        },
+      },
+    ])
+    mocks.getProjectCriticalPathSnapshot
+      .mockResolvedValueOnce({
+        projectId: 'project-1',
+        autoTaskIds: ['snapshot-critical'],
+        manualAttentionTaskIds: [],
+        manualInsertedTaskIds: [],
+        primaryChain: null,
+        alternateChains: [],
+        displayTaskIds: ['snapshot-critical'],
+        watchedTaskIds: [],
+        edges: [],
+        tasks: [{
+          taskId: 'snapshot-critical',
+          title: 'Current E3 critical work',
+          floatDays: 0,
+          durationDays: 20,
+          isAutoCritical: true,
+          isManualAttention: false,
+          isManualInserted: false,
+        }],
+        networkSchedule: [
+          {
+            taskId: 'snapshot-critical', earliestStartOffsetDays: 0, earliestFinishOffsetDays: 20, latestStartOffsetDays: 0, latestFinishOffsetDays: 20,
+            floatDays: 0, float: buildAvailableDurationMetric(0, 'construction_production_day', '2026-01-01'),
+            freeFloatDays: 0, freeFloat: buildAvailableDurationMetric(0, 'construction_production_day', '2026-01-01'),
+            durationDays: 20, duration: buildAvailableDurationMetric(20, 'construction_production_day', '2026-01-01'), isAutoCritical: true,
+          },
+          {
+            taskId: 'snapshot-omitted-stale-float', earliestStartOffsetDays: 0, earliestFinishOffsetDays: 30, latestStartOffsetDays: 20, latestFinishOffsetDays: 50,
+            floatDays: 20, float: buildAvailableDurationMetric(20, 'construction_production_day', '2026-01-01'),
+            freeFloatDays: 10, freeFloat: buildAvailableDurationMetric(10, 'construction_production_day', '2026-01-01'),
+            durationDays: 30, duration: buildAvailableDurationMetric(30, 'construction_production_day', '2026-01-01'), isAutoCritical: false,
+          },
+        ],
+        projectDurationDays: 20,
+      })
+      .mockResolvedValueOnce({
+        projectId: 'project-1',
+        autoTaskIds: ['snapshot-omitted-stale-float'],
+        manualAttentionTaskIds: [],
+        manualInsertedTaskIds: [],
+        primaryChain: null,
+        alternateChains: [],
+        displayTaskIds: ['snapshot-omitted-stale-float'],
+        watchedTaskIds: [],
+        edges: [],
+        tasks: [{ taskId: 'snapshot-omitted-stale-float', title: 'Second snapshot critical task', floatDays: 0, durationDays: 30, isAutoCritical: true, isManualAttention: false, isManualInserted: false }],
+        networkSchedule: [],
+        projectDurationDays: 30,
+      })
+    mocks.executeSQL.mockImplementation(async (sql: string) => {
+      if (sql.includes('task_dependencies')) return []
+      if (sql.includes('monthly_plan_items')) return []
+      return []
+    })
+
+    const result = await evaluateRuntimeScheduleAcceleration({
+      projectId: 'project-1',
+      targetEndDate: '2026-02-28',
+      asOfDate: '2026-01-01',
+    })
+
+    const crashing = result.targetFeasibility?.accelerationProposal?.actions.find((action) => action.type === 'crashing')
+    expect(mocks.getProjectCriticalPathSnapshot).toHaveBeenCalledTimes(1)
+    expect(result.projectRemainingForecast.calculationContext.criticalPath.latestCriticalFinishDate).toBe('2026-01-20')
+    expect(crashing?.networkSlackFacts.criticalOrNearCriticalTaskCount).toBe(1)
+    expect(crashing?.affectedRowIds).toContain('snapshot-critical')
+    expect(crashing?.affectedRowIds).not.toContain('snapshot-omitted-stale-float')
+  })
+
+  it('does not let an untyped E3 primary chain span extend the E4 finish', async () => {
     mocks.getTasks.mockResolvedValue([
       {
         id: 'task-primary-chain',
@@ -2324,6 +2473,7 @@ describe('scheduleAccelerationRuntimeService', () => {
       {
         taskId: 'task-primary-chain',
         remainingDurationDays: 3,
+        remainingDuration: buildAvailableDurationMetric(3, 'construction_production_day', '2026-06-10'),
         forecastFinishDate: '2026-06-12',
       },
     ])
@@ -2339,19 +2489,30 @@ describe('scheduleAccelerationRuntimeService', () => {
     })
 
     expect(result.projectRemainingForecast.calculationContext.criticalPath).toEqual(expect.objectContaining({
-      criticalPathSpanFinishDate: '2026-06-27',
+      criticalPathSpanFinishDate: null,
     }))
-    expect(result.projectRemainingForecast.forecastFinishDate).toBe('2026-06-27')
+    expect(result.projectRemainingForecast.forecastFinishDate).toBe('2026-06-12')
   })
 
-  it('hydrates E2 probability duration into E4 optimistic and P80 confidence-band finishes', async () => {
+  it('freezes the business asOf before hydrating typed E2 probability duration into E4 finishes', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-02-13T16:30:00.000Z'))
+    mocks.resolveConstructionCalendarContext.mockResolvedValue({
+      ...identifiedConstructionCalendar(),
+      windows: [{
+        holidayCode: 'spring_festival_2026',
+        startDate: '2026-02-15',
+        endDate: '2026-02-17',
+        counts_as_construction_shutdown: true,
+      }],
+    })
     mocks.getTasks.mockResolvedValue([
       {
         id: 'task-with-probability',
         project_id: 'project-1',
         title: 'Task with probability forecast',
-        planned_start_date: '2026-06-01',
-        planned_end_date: '2026-06-12',
+        planned_start_date: '2026-02-01',
+        planned_end_date: '2026-02-19',
         status: 'todo',
         progress: 0,
         is_critical: true,
@@ -2366,18 +2527,24 @@ describe('scheduleAccelerationRuntimeService', () => {
     mocks.listCurrentTaskDurationForecasts.mockResolvedValue([
       {
         taskId: 'task-with-probability',
-        remainingDurationDays: 4,
-        forecastFinishDate: '2026-06-13',
+        remainingDurationDays: 3,
+        remainingDuration: buildAvailableDurationMetric(3, 'construction_production_day', '2026-02-14'),
+        forecastFinishDate: '2026-03-31',
         probabilityDuration: {
           method: 'pert_from_existing_percentiles',
           source: 'duration_forecast_percentiles',
-          p20RemainingDays: 2,
-          p50RemainingDays: 4,
-          p80RemainingDays: 9,
-          expectedRemainingDays: 5,
+          p20RemainingDays: 30,
+          p50RemainingDays: 40,
+          p80RemainingDays: 60,
+          expectedRemainingDays: 45,
           variance: 1,
           standardDeviationDays: 1,
-          confidenceBandWidthDays: 7,
+          confidenceBandWidthDays: 30,
+        },
+        probabilityDurationMetrics: {
+          p20RemainingDuration: buildAvailableDurationMetric(2, 'construction_production_day', '2026-02-14'),
+          p50RemainingDuration: buildAvailableDurationMetric(3, 'construction_production_day', '2026-02-14'),
+          p80RemainingDuration: buildAvailableDurationMetric(4, 'construction_production_day', '2026-02-14'),
         },
       },
     ])
@@ -2387,19 +2554,24 @@ describe('scheduleAccelerationRuntimeService', () => {
       return []
     })
 
-    const result = await buildRuntimeProjectRemainingDurationForecast({
-      projectId: 'project-1',
-      asOfDate: '2026-06-10',
-    })
+    try {
+      const result = await buildRuntimeProjectRemainingDurationForecast({ projectId: 'project-1' })
 
-    expect(result.projectRemainingForecast.calculationContext.criticalPath).toEqual(expect.objectContaining({
-      optimisticBandFinishDate: '2026-06-11',
-      confidenceBandFinishDate: '2026-06-18',
-    }))
-    expect(result.projectRemainingForecast.forecastFinishDate).toBe('2026-06-18')
+      expect(result.projectRemainingForecast.projectRemainingForecast.asOf).toBe('2026-02-14')
+      expect(result.projectRemainingForecast.calculationContext.criticalPath).toEqual(expect.objectContaining({
+        optimisticBandFinishDate: '2026-02-18',
+        latestCriticalFinishDate: '2026-02-19',
+        confidenceBandFinishDate: '2026-02-20',
+      }))
+      expect(result.projectRemainingForecast.forecastFinishDate).toBe('2026-02-20')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('hydrates E1 execution-reference duration suggestions so runtime crashing respects the governed P80 floor', async () => {
+    const frozenCalendar = identifiedConstructionCalendar()
+    mocks.resolveConstructionCalendarContext.mockResolvedValue(frozenCalendar)
     mocks.getTasks.mockResolvedValue([
       {
         id: 'task-crash-floor',
@@ -2426,6 +2598,7 @@ describe('scheduleAccelerationRuntimeService', () => {
       {
         taskId: 'task-crash-floor',
         remainingDurationDays: 20,
+        remainingDuration: buildAvailableDurationMetric(20, 'construction_production_day', '2026-06-10'),
         forecastFinishDate: '2026-06-20',
       },
     ])
@@ -2456,7 +2629,9 @@ describe('scheduleAccelerationRuntimeService', () => {
       taskId: 'task-crash-floor',
       standardWorkCode: 'structure_standard_floor',
       suggestionPurpose: 'execution_reference',
+      workCalendar: frozenCalendar,
     }))
+    expect(mocks.resolveConstructionCalendarContext).toHaveBeenCalledTimes(1)
     expect(adjustment).toEqual(expect.objectContaining({
       minDurationDays: 18,
       proposedDurationDays: 18,

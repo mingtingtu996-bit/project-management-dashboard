@@ -174,6 +174,7 @@ function isAcceptedBaseDurationSampleRow(row: Record<string, unknown>) {
   return baseDurationAssetKeyFromSampleRow(row) === BASE_DURATION_BENCHMARK_ASSET_KEY
     && readText(row, 'sample_status', 'sampleStatus') === 'active'
     && readBoolean(row, 'included_in_benchmark')
+    && ['strong', 'medium'].includes(readText(row, 'sample_strength', 'sampleStrength').toLowerCase())
     && hasFiniteNumber(row, 'actual_duration')
     && Boolean(readText(row, 'completed_at', 'completedAt'))
 }

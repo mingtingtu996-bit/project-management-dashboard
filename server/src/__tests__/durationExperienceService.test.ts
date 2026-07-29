@@ -906,6 +906,18 @@ describe('durationExperienceService', () => {
         forecast_finish_date: '2026-05-04',
         remaining_duration_days: 4,
         execution_reference_days: 4,
+        metadata: {
+          executionReferenceDuration: {
+            value: 4,
+            unit: 'construction_production_day',
+            calendarRef: 'work_calendar',
+            calendarVersion: '2026|work-calendar-version-1',
+            timezone: 'Asia/Shanghai',
+            asOf: '2026-05-01',
+            availability: 'available',
+            unavailableReason: null,
+          },
+        },
         forecast_error_days: 1,
         model_version: 'remaining_duration_forecast_v1.1',
         forecast_source: 'remaining_duration_forecast',
@@ -947,10 +959,125 @@ describe('durationExperienceService', () => {
           production_consumption_policy: 'active_velocity_multiplier_input',
           forecast_id: 'forecast-1',
           forecast_duration_days: 4,
-          forecast_duration_source: 'execution_reference_days',
+          forecast_duration_source: 'execution_reference_duration',
           forecast_ratio: 1.25,
           plan_ratio: expect.closeTo(0.833, 3),
         }),
+      }),
+    }))
+    expect(mocks.forecastQuery.select).toHaveBeenCalledWith(expect.stringContaining('metadata'))
+  })
+
+  it.each([
+    {
+      name: 'stale asOf',
+      executionReferenceDuration: {
+        value: 4,
+        unit: 'construction_production_day',
+        calendarRef: 'work_calendar',
+        calendarVersion: '2026|work-calendar-version-1',
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-04-30',
+        availability: 'available',
+        unavailableReason: null,
+      },
+    },
+    {
+      name: 'unavailable metric',
+      executionReferenceDuration: {
+        value: null,
+        unit: 'construction_production_day',
+        calendarRef: 'work_calendar',
+        calendarVersion: '2026|work-calendar-version-1',
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-05-01',
+        availability: 'unavailable',
+        unavailableReason: 'duration_value_missing',
+      },
+    },
+    {
+      name: 'calendar identity mismatch',
+      executionReferenceDuration: {
+        value: 4,
+        unit: 'construction_production_day',
+        calendarRef: 'work_calendar',
+        calendarVersion: 'stale-calendar-version',
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-05-01',
+        availability: 'available',
+        unavailableReason: null,
+      },
+    },
+  ])('does not learn from raw forecast fallbacks when the typed execution reference is $name', async ({ executionReferenceDuration }) => {
+    mocks.forecastQuery.maybeSingle.mockResolvedValue({
+      data: {
+        id: 'forecast-untrusted-reference',
+        generated_at: '2026-05-01T00:00:00.000Z',
+        forecast_finish_date: '2026-12-31',
+        remaining_duration_days: 999,
+        execution_reference_days: 999,
+        metadata: { executionReferenceDuration },
+        forecast_error_days: 1,
+        model_version: 'remaining_duration_forecast_v1.1',
+        forecast_source: 'remaining_duration_forecast',
+        duration_calibration_source: 'runtime_forecast',
+      },
+      error: null,
+    })
+
+    const collected = await collectDurationExperienceSampleFromTask(completedTask({
+      id: 'task-untrusted-forecast-reference',
+    }), { actorId: 'user-1' } as any)
+
+    expect(collected).toBe(true)
+    expect(mocks.insert).toHaveBeenCalledWith(expect.objectContaining({
+      task_id: 'task-untrusted-forecast-reference',
+      metadata: expect.objectContaining({
+        forecast_learning_observation: null,
+      }),
+    }))
+  })
+
+  it.each([
+    ['impossible February 30', '2026-02-30T08:00:00.000Z', '2026-03-02'],
+    ['invalid non-leap February 29', '2026-02-29T08:00:00.000Z', '2026-03-01'],
+  ])('rejects %s forecast generated_at timestamps instead of accepting Date normalization', async (_name, generatedAt, normalizedAsOf) => {
+    mocks.forecastQuery.maybeSingle.mockResolvedValue({
+      data: {
+        id: 'forecast-invalid-generated-at',
+        generated_at: generatedAt,
+        forecast_finish_date: '2026-05-04',
+        remaining_duration_days: 4,
+        execution_reference_days: 4,
+        metadata: {
+          executionReferenceDuration: {
+            value: 4,
+            unit: 'construction_production_day',
+            calendarRef: 'work_calendar',
+            calendarVersion: '2026|work-calendar-version-1',
+            timezone: 'Asia/Shanghai',
+            asOf: normalizedAsOf,
+            availability: 'available',
+            unavailableReason: null,
+          },
+        },
+        forecast_error_days: 1,
+        model_version: 'remaining_duration_forecast_v1.1',
+        forecast_source: 'remaining_duration_forecast',
+        duration_calibration_source: 'runtime_forecast',
+      },
+      error: null,
+    })
+
+    const collected = await collectDurationExperienceSampleFromTask(completedTask({
+      id: 'task-invalid-forecast-generated-at',
+    }), { actorId: 'user-1' } as any)
+
+    expect(collected).toBe(true)
+    expect(mocks.insert).toHaveBeenCalledWith(expect.objectContaining({
+      task_id: 'task-invalid-forecast-generated-at',
+      metadata: expect.objectContaining({
+        forecast_learning_observation: null,
       }),
     }))
   })

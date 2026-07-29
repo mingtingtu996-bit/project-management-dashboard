@@ -115,11 +115,6 @@ function getForecastBadgeClass(severity?: string | null) {
   return 'border-blue-100 bg-blue-50 text-blue-700'
 }
 
-function readDurationRiskDays(value: unknown) {
-  const numberValue = typeof value === 'number' ? value : Number(value)
-  return Number.isFinite(numberValue) && numberValue > 0 ? Math.round(numberValue) : null
-}
-
 function readFloatDays(value: unknown) {
   const numberValue = typeof value === 'number' ? value : Number(value)
   return Number.isFinite(numberValue) ? Math.round(numberValue) : null
@@ -186,34 +181,8 @@ function readDurationRiskRange(task?: Task | null) {
     ?? range.duration_risk_distribution
     ?? suggestionRange.durationRiskDistribution
     ?? suggestionRange.duration_risk_distribution
-  const p20 = readDurationRiskDays(
-    task?.duration_risk_p20_days
-      ?? range.p20_days
-      ?? range.p20Days
-      ?? suggestion.riskP20DurationDays
-      ?? suggestion.risk_p20_duration_days
-      ?? suggestionRange.p20Days
-      ?? suggestionRange.p20_days,
-  )
-  const p50 = readDurationRiskDays(
-    task?.duration_risk_p50_days
-      ?? range.p50_days
-      ?? range.p50Days
-      ?? suggestion.riskP50DurationDays
-      ?? suggestion.risk_p50_duration_days
-      ?? suggestionRange.p50Days
-      ?? suggestionRange.p50_days,
-  )
-  const p80 = readDurationRiskDays(
-    task?.duration_risk_p80_days
-      ?? range.p80_days
-      ?? range.p80Days
-      ?? suggestion.riskP80DurationDays
-      ?? suggestion.risk_p80_duration_days
-      ?? suggestionRange.p80Days
-      ?? suggestionRange.p80_days,
-  )
-  if (!distribution && p20 == null && p50 == null && p80 == null) return null
+  const hasDeclaredRiskRange = Object.keys(range).length > 0 || Object.keys(suggestionRange).length > 0
+  if (!distribution && !hasDeclaredRiskRange) return null
   return { distribution }
 }
 

@@ -88,6 +88,23 @@ function identifiedConstructionCalendar() {
   }
 }
 
+function buildNetworkFloatMetric(
+  value: number | null,
+  asOf = '2026-01-01',
+  availability: 'available' | 'unavailable' = 'available',
+) {
+  return {
+    value: availability === 'available' ? value : null,
+    unit: 'construction_production_day' as const,
+    calendarRef: 'work_calendar',
+    calendarVersion: 'calendar-v1',
+    timezone: 'Asia/Shanghai',
+    asOf,
+    availability,
+    unavailableReason: availability === 'available' ? null : 'critical_path_float_unavailable',
+  }
+}
+
 function shiftGregorianDateOnly(date: string, days: number) {
   const parsed = new Date(`${date}T00:00:00.000Z`)
   parsed.setUTCDate(parsed.getUTCDate() + days)
@@ -399,8 +416,8 @@ describe('scheduleAccelerationService', () => {
             planned_start_date: '2026-01-01',
             planned_end_date: '2026-03-31',
             is_critical: false,
-            total_float_days: 30,
-            free_float_days: 15,
+            total_float_days: 2,
+            free_float_days: 1,
             standard_task_metadata: {
               criticalPathEligible: true,
               resourceProfile: { resourceClass: 'electrical' },
@@ -422,6 +439,150 @@ describe('scheduleAccelerationService', () => {
     const crashing = feasibility?.accelerationProposal?.actions.find((action) => action.type === 'crashing')
     expect(crashing?.durationAdjustments.map((adjustment) => adjustment.clientRowId)).toContain('e3-critical-only')
     expect(crashing?.durationAdjustments.map((adjustment) => adjustment.clientRowId)).not.toContain('heuristic-fallback-only')
+  })
+
+  it('uses the full typed E3 network schedule for near-critical crashing targets omitted by sparse task snapshots', async () => {
+    criticalPathMocks.getProjectCriticalPathSnapshot.mockResolvedValue({
+      projectId: 'project-1',
+      autoTaskIds: ['network-critical'],
+      manualAttentionTaskIds: [],
+      manualInsertedTaskIds: [],
+      primaryChain: null,
+      alternateChains: [],
+      displayTaskIds: ['network-critical'],
+      watchedTaskIds: [],
+      edges: [],
+      tasks: [{
+        taskId: 'network-critical',
+        title: 'Network critical task',
+        floatDays: 0,
+        durationDays: 20,
+        isAutoCritical: true,
+        isManualAttention: false,
+        isManualInserted: false,
+      }],
+      networkSchedule: [
+        {
+          taskId: 'network-critical',
+          earliestStartOffsetDays: 0,
+          earliestFinishOffsetDays: 20,
+          latestStartOffsetDays: 0,
+          latestFinishOffsetDays: 20,
+          floatDays: 0,
+          float: buildNetworkFloatMetric(0),
+          freeFloatDays: 0,
+          freeFloat: buildNetworkFloatMetric(0),
+          durationDays: 20,
+          duration: buildNetworkFloatMetric(20),
+          isAutoCritical: true,
+        },
+        {
+          taskId: 'network-near-critical',
+          earliestStartOffsetDays: 0,
+          earliestFinishOffsetDays: 30,
+          latestStartOffsetDays: 5,
+          latestFinishOffsetDays: 35,
+          floatDays: 5,
+          float: buildNetworkFloatMetric(5),
+          freeFloatDays: 1,
+          freeFloat: buildNetworkFloatMetric(1),
+          durationDays: 30,
+          duration: buildNetworkFloatMetric(30),
+          isAutoCritical: false,
+        },
+      ],
+      projectDurationDays: 35,
+    })
+
+    const feasibility = await evaluateRuntimeDelayRecoveryWithCriticalPath({
+      projectId: 'project-1',
+      rows: [
+        buildRow({
+          clientRowId: 'network-critical',
+          values: {
+            ...buildRow().values,
+            title: 'Network critical task',
+            planned_start_date: '2026-01-01',
+            planned_end_date: '2026-01-20',
+            total_float_days: 20,
+            free_float_days: 10,
+          },
+        }),
+        buildRow({
+          clientRowId: 'network-near-critical',
+          values: {
+            ...buildRow().values,
+            title: 'Network near-critical task',
+            planned_start_date: '2026-01-01',
+            planned_end_date: '2026-03-31',
+            total_float_days: 20,
+            free_float_days: 10,
+          },
+        }),
+      ],
+      targetEndDate: '2026-02-28',
+      mode: 'compression_preview',
+      context: {
+        asOfDate: '2026-01-01',
+        runtime: { projectRemainingForecastFinishDate: '2026-03-31' },
+      },
+    })
+
+    const crashing = feasibility?.accelerationProposal?.actions.find((action) => action.type === 'crashing')
+    expect(crashing?.affectedRowIds).toContain('network-near-critical')
+    expect(crashing?.networkSlackFacts.criticalOrNearCriticalTaskCount).toBe(2)
+  })
+
+  it('clears legacy float values when the full E3 network schedule has unavailable typed metrics', async () => {
+    criticalPathMocks.getProjectCriticalPathSnapshot.mockResolvedValue({
+      projectId: 'project-1',
+      autoTaskIds: ['network-critical'],
+      manualAttentionTaskIds: [],
+      manualInsertedTaskIds: [],
+      primaryChain: null,
+      alternateChains: [],
+      displayTaskIds: ['network-critical', 'network-unavailable'],
+      watchedTaskIds: [],
+      edges: [],
+      tasks: [
+        { taskId: 'network-critical', title: 'Network critical task', floatDays: 0, durationDays: 20, isAutoCritical: true, isManualAttention: false, isManualInserted: false },
+        { taskId: 'network-unavailable', title: 'Unavailable float task', floatDays: 2, freeFloatDays: 1, durationDays: 30, isAutoCritical: false, isManualAttention: false, isManualInserted: false },
+      ],
+      networkSchedule: [
+        {
+          taskId: 'network-critical', earliestStartOffsetDays: 0, earliestFinishOffsetDays: 20, latestStartOffsetDays: 0, latestFinishOffsetDays: 20,
+          floatDays: 0, float: buildNetworkFloatMetric(0), freeFloatDays: 0, freeFloat: buildNetworkFloatMetric(0),
+          durationDays: 20, duration: buildNetworkFloatMetric(20), isAutoCritical: true,
+        },
+        {
+          taskId: 'network-unavailable', earliestStartOffsetDays: 0, earliestFinishOffsetDays: 30, latestStartOffsetDays: 2, latestFinishOffsetDays: 32,
+          floatDays: 2, float: buildNetworkFloatMetric(null, '2026-01-01', 'unavailable'),
+          freeFloatDays: 1, freeFloat: buildNetworkFloatMetric(null, '2026-01-01', 'unavailable'),
+          durationDays: 30, duration: buildNetworkFloatMetric(30), isAutoCritical: false,
+        },
+      ],
+      projectDurationDays: 32,
+    })
+
+    const feasibility = await evaluateRuntimeDelayRecoveryWithCriticalPath({
+      projectId: 'project-1',
+      rows: [
+        buildRow({ clientRowId: 'network-critical', values: { ...buildRow().values, planned_start_date: '2026-01-01', planned_end_date: '2026-01-20' } }),
+        buildRow({
+          clientRowId: 'network-unavailable',
+          values: { ...buildRow().values, planned_start_date: '2026-01-01', planned_end_date: '2026-03-31', total_float_days: 2, free_float_days: 1 },
+        }),
+      ],
+      targetEndDate: '2026-02-28',
+      mode: 'compression_preview',
+      context: {
+        asOfDate: '2026-01-01',
+        runtime: { projectRemainingForecastFinishDate: '2026-03-31' },
+      },
+    })
+
+    const crashing = feasibility?.accelerationProposal?.actions.find((action) => action.type === 'crashing')
+    expect(crashing?.affectedRowIds).not.toContain('network-unavailable')
   })
 
   it('anchors runtime overshoot to the E4 project remaining forecast finish date', () => {
