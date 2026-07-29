@@ -1535,6 +1535,15 @@ async function buildFreshFloatContext(projectId: string, items: MonthlyPlanSeedI
   if (!items.some((item) => item.source_task_id)) return new Map<string, Record<string, unknown>>()
   try {
     const snapshot = await getProjectCriticalPathSnapshot(projectId)
+    const snapshotStatus = normalizeText(snapshot.calculationStatus) || 'unknown'
+    if (snapshotStatus !== 'fresh') {
+      return new Map(items.map((item) => [getStableCandidateKey(item), {
+        fresh_float_days: null,
+        fresh_float_authority_checked: true,
+        fresh_float_snapshot_source: 'projectCriticalPathService.getProjectCriticalPathSnapshot',
+        fresh_float_snapshot_status: snapshotStatus,
+      }]))
+    }
     const scheduleRows = Array.isArray((snapshot as any).networkSchedule) && (snapshot as any).networkSchedule.length > 0
       ? (snapshot as any).networkSchedule
       : (snapshot.tasks ?? [])
@@ -1547,13 +1556,20 @@ async function buildFreshFloatContext(projectId: string, items: MonthlyPlanSeedI
       const floatDays = readAvailableProductionDuration(task?.float)
       return [getStableCandidateKey(item), {
         fresh_float_days: floatDays,
+        fresh_float_authority_checked: true,
         fresh_float_snapshot_source: 'projectCriticalPathService.getProjectCriticalPathSnapshot',
+        fresh_float_snapshot_status: snapshotStatus,
         ...(floatDays === null ? {} : { critical_float_tier: criticalFloatTier(floatDays) }),
       }]
     }))
   } catch (error) {
     logger.debug('[monthlyPlanGenerationService] fresh critical-path snapshot unavailable for monthly plan generation', { projectId, error })
-    return new Map()
+    return new Map(items.map((item) => [getStableCandidateKey(item), {
+      fresh_float_days: null,
+      fresh_float_authority_checked: true,
+      fresh_float_snapshot_source: 'projectCriticalPathService.getProjectCriticalPathSnapshot',
+      fresh_float_snapshot_status: 'unavailable',
+    }]))
   }
 }
 
@@ -1568,10 +1584,12 @@ function estimateMonthlyCapacityDemand(item: MonthlyPlanSeedItem, forecastMetric
 
 function monthlyCapacityPriority(item: MonthlyPlanSeedItem): MonthlyCapacityPriority {
   if (item.carryover_from_item_id || item.commitment_status === 'carried_over') return 'carryover'
-  const floatTier = readAlgorithmContext(item).critical_float_tier
+  const context = readAlgorithmContext(item)
+  const floatTier = context.critical_float_tier
   if (floatTier === 'true_critical') return 'critical'
   if (floatTier === 'near_critical') return 'near_critical'
   if (floatTier === 'pseudo_critical') return 'new_work'
+  if (context.fresh_float_authority_checked === true) return 'new_work'
   if (item.is_critical) return 'critical'
   return 'new_work'
 }

@@ -57,6 +57,7 @@ const mocks = vi.hoisted(() => {
     resolveAlgorithmSeedRecords: vi.fn(async (_assetType?: string) => []),
     resolveV1474SeasonalProductivity: vi.fn(async () => null),
     getProjectCriticalPathSnapshot: vi.fn(async () => ({
+      calculationStatus: 'fresh',
       tasks: [],
       displayTaskIds: [],
       autoTaskIds: [],
@@ -228,6 +229,7 @@ describe('monthlyPlanGenerationService v1.4.7 manual overrides and metadata', ()
     mocks.resolveAlgorithmSeedRecords.mockResolvedValue([])
     mocks.getProjectCriticalPathSnapshot.mockReset()
     mocks.getProjectCriticalPathSnapshot.mockResolvedValue({
+      calculationStatus: 'fresh',
       tasks: [],
       displayTaskIds: [],
       autoTaskIds: [],
@@ -1247,6 +1249,7 @@ describe('monthlyPlanGenerationService v1.4.7 manual overrides and metadata', ()
 
   it('uses fresh near-critical float tier in capacity allocation priority instead of metadata only', async () => {
     mocks.getProjectCriticalPathSnapshot.mockResolvedValue({
+      calculationStatus: 'fresh',
       tasks: [
         { taskId: 'pseudo-task', floatDays: 8, float: { value: 8, unit: 'construction_production_day', availability: 'available' }, isAutoCritical: false, isManualAttention: false, isManualInserted: false, durationDays: 21, title: 'Pseudo critical' },
         { taskId: 'near-task', floatDays: 2, float: { value: 2, unit: 'construction_production_day', availability: 'available' }, isAutoCritical: false, isManualAttention: false, isManualInserted: false, durationDays: 21, title: 'Near critical' },
@@ -1316,6 +1319,7 @@ describe('monthlyPlanGenerationService v1.4.7 manual overrides and metadata', ()
 
   it('does not derive a critical tier from a legacy raw float when typed float is unavailable', async () => {
     mocks.getProjectCriticalPathSnapshot.mockResolvedValue({
+      calculationStatus: 'fresh',
       tasks: [{
         taskId: 'unavailable-float-task',
         floatDays: 0,
@@ -1350,7 +1354,7 @@ describe('monthlyPlanGenerationService v1.4.7 manual overrides and metadata', ()
         planned_start_date: '2026-05-01',
         planned_end_date: '2026-05-31',
         sort_order: 1,
-        is_critical: false,
+        is_critical: true,
         generation_metadata: {
           resource_class: 'civil_crew',
           scope_keys: { building: 'A', floor: '1F', zone: 'east', workface: 'wf-1' },
@@ -1370,8 +1374,62 @@ describe('monthlyPlanGenerationService v1.4.7 manual overrides and metadata', ()
     expect(item?.generation_metadata.algorithm_context?.critical_float_tier).toBeUndefined()
   })
 
+  it('does not use a cached-after-failure critical path snapshot for monthly capacity priority', async () => {
+    mocks.getProjectCriticalPathSnapshot.mockResolvedValue({
+      calculationStatus: 'cached_after_failure',
+      tasks: [{
+        taskId: 'stale-snapshot-task',
+        floatDays: 0,
+        float: { value: 0, unit: 'construction_production_day', availability: 'available' },
+        isAutoCritical: true,
+        isManualAttention: false,
+        isManualInserted: false,
+        durationDays: 21,
+        title: 'Stale snapshot critical task',
+      }],
+      displayTaskIds: ['stale-snapshot-task'],
+      autoTaskIds: ['stale-snapshot-task'],
+    })
+    mocks.forecastBatchTasks.mockResolvedValue([
+      { taskId: 'stale-snapshot-task', remainingDurationDays: 21, forecastFinishDate: '2026-05-31', forecastDelayDays: 0, confidenceLevel: 'medium' },
+    ])
+
+    mockSupabaseRows({
+      task_baselines: [
+        { id: 'baseline-1', project_id: 'project-1', version: 1, status: 'confirmed', confirmed_at: '2026-05-01T00:00:00.000Z' },
+      ],
+      task_baseline_items: [{
+        id: 'stale-snapshot-item',
+        baseline_version_id: 'baseline-1',
+        source_task_id: 'stale-snapshot-task',
+        title: 'Stale snapshot critical task',
+        planned_start_date: '2026-05-01',
+        planned_end_date: '2026-05-31',
+        sort_order: 1,
+        is_critical: true,
+        generation_metadata: {
+          resource_class: 'civil_crew',
+          scope_keys: { building: 'A', floor: '1F', zone: 'east', workface: 'wf-1' },
+        },
+      }],
+      monthly_plans: [],
+      monthly_plan_items: [],
+    })
+
+    const source = await resolveMonthlyPlanGenerationSourceV1474('project-1', '2026-05')
+    const item = source.items.find((candidate) => candidate.source_task_id === 'stale-snapshot-task')
+
+    expect(item?.generation_metadata.algorithm_context).toEqual(expect.objectContaining({
+      fresh_float_days: null,
+      fresh_float_snapshot_status: 'cached_after_failure',
+      monthly_capacity_priority: 'new_work',
+    }))
+    expect(item?.generation_metadata.algorithm_context?.critical_float_tier).toBeUndefined()
+  })
+
   it('uses fresh pseudo-critical float tier over stale baseline critical flags when allocating capacity', async () => {
     mocks.getProjectCriticalPathSnapshot.mockResolvedValue({
+      calculationStatus: 'fresh',
       tasks: [
         { taskId: 'stale-critical-task', floatDays: 8, float: { value: 8, unit: 'construction_production_day', availability: 'available' }, isAutoCritical: false, isManualAttention: false, isManualInserted: false, durationDays: 21, title: 'Stale critical' },
         { taskId: 'near-task', floatDays: 2, float: { value: 2, unit: 'construction_production_day', availability: 'available' }, isAutoCritical: false, isManualAttention: false, isManualInserted: false, durationDays: 21, title: 'Near critical' },
@@ -1608,6 +1666,7 @@ describe('monthlyPlanGenerationService v1.4.7 manual overrides and metadata', ()
 
   it('splits capacity pools by readiness state, scope, resource class, and fresh float tiers', async () => {
     mocks.getProjectCriticalPathSnapshot.mockResolvedValue({
+      calculationStatus: 'fresh',
       tasks: [
         { taskId: 'ready-task', floatDays: 0, float: { value: 0, unit: 'construction_production_day', availability: 'available' }, isAutoCritical: true, isManualAttention: false, isManualInserted: false, durationDays: 10, title: 'Ready critical' },
         { taskId: 'conditional-task', floatDays: 2, float: { value: 2, unit: 'construction_production_day', availability: 'available' }, isAutoCritical: false, isManualAttention: false, isManualInserted: false, durationDays: 10, title: 'Conditional near critical' },
