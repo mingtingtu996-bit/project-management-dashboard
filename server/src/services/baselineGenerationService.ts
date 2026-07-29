@@ -481,6 +481,28 @@ function readDurationSuggestionDaysForGeneration(
   return readGovernedDurationSuggestionDays(suggestion, calendar, asOfDate)
 }
 
+function readAuthoritativeForecastFinishDate(
+  forecast: CachedDurationForecastRow | undefined,
+  calendar: ConstructionCalendarContext | null | undefined,
+  asOfDate: string | null | undefined,
+) {
+  if (!forecast || forecast.is_current !== true || !isAuthoritativeConstructionCalendar(calendar)) return null
+  const remainingDuration = normalizeDurationMetricDto(readRecord(forecast.metadata).remainingDuration)
+  const expectedAsOf = normalizeDateOnlyText(asOfDate)
+  if (
+    !remainingDuration
+    || remainingDuration.availability !== 'available'
+    || remainingDuration.unit !== 'construction_production_day'
+    || remainingDuration.value === null
+    || remainingDuration.value < 0
+    || remainingDuration.calendarRef !== calendar.calendarRef
+    || remainingDuration.calendarVersion !== calendar.calendarVersion
+    || remainingDuration.timezone !== calendar.timezone
+    || remainingDuration.asOf !== expectedAsOf
+  ) return null
+  return normalizeBaselineDate(forecast.forecast_finish_date ?? null)
+}
+
 type ResolvedBaselineDraftDates = {
   plannedStartDate: string | null
   plannedEndDate: string | null
@@ -538,7 +560,11 @@ function resolveBaselineDraftDates(
     }
 
     const forecast = options.forecastByTaskId?.get(task.id)
-    const forecastFinish = normalizeBaselineDate(forecast?.forecast_finish_date ?? null)
+    const forecastFinish = readAuthoritativeForecastFinishDate(
+      forecast,
+      options.constructionCalendar,
+      options.durationAsOfDate,
+    )
     const forecastExtendsPlan = forecastFinish && (!plannedEndDate || (compareBaselineDate(forecastFinish, plannedEndDate) ?? 0) > 0)
     if (forecastExtendsPlan) {
       plannedEndDate = forecastFinish
@@ -1794,6 +1820,10 @@ type CachedDurationForecastRow = {
   duration_calibration_source?: string | null
   duration_provenance?: string | null
   factor_summary?: unknown
+  metadata?: unknown
+  generated_at?: string | null
+  created_at?: string | null
+  is_current?: boolean | null
 }
 
 type ExternalRiskRow = Record<string, any> & {
@@ -1869,18 +1899,18 @@ async function loadLatestForecastsByTaskId(taskRows: TaskBaselineTaskRow[]) {
   try {
     const { data, error } = await supabase
       .from('task_duration_forecasts')
-      .select('task_id, forecast_delay_days, forecast_finish_date, remaining_duration_days, confidence_level, duration_calibration_source, duration_provenance, factor_summary, generated_at, created_at, is_current')
+      .select('task_id, forecast_delay_days, forecast_finish_date, remaining_duration_days, confidence_level, duration_calibration_source, duration_provenance, factor_summary, metadata, generated_at, created_at, is_current')
+      .eq('is_current', true)
       .in('task_id', executableTaskIds)
-      .order('is_current', { ascending: false })
       .order('generated_at', { ascending: false })
       .order('created_at', { ascending: false })
-      .limit(executableTaskIds.length * 3)
+      .limit(executableTaskIds.length)
     if (error) throw error
 
     const latestByTaskId = new Map<string, CachedDurationForecastRow>()
     for (const row of (data ?? []) as CachedDurationForecastRow[]) {
       const taskId = normalizeText(row.task_id)
-      if (taskId && !latestByTaskId.has(taskId)) {
+      if (taskId && row.is_current === true && !latestByTaskId.has(taskId)) {
         latestByTaskId.set(taskId, row)
       }
     }

@@ -71,6 +71,39 @@ import type { ConstructionCalendarContext } from '../services/constructionCalend
 import { evaluateBaselineConfirmationGate } from '../services/planningRevisionPoolService.js'
 
 describe('baselineGenerationService v1.4.7.4 seed consumption', () => {
+  const authoritativeE2Calendar: ConstructionCalendarContext = {
+    basis: 'official_construction_calendar_seed',
+    windows: [],
+    calendarRef: 'work_calendar',
+    calendarVersion: 'calendar-v1',
+    timezone: 'Asia/Shanghai',
+    availability: 'available',
+    unavailableReason: null,
+  }
+
+  function authoritativeE2Forecast(overrides: Record<string, unknown> = {}) {
+    return {
+      forecast_finish_date: '2026-05-18',
+      remaining_duration_days: 10,
+      confidence_level: 'medium',
+      generated_at: '2026-05-09T01:00:00.000Z',
+      is_current: true,
+      metadata: {
+        remainingDuration: {
+          value: 10,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          asOf: '2026-05-09',
+          availability: 'available',
+          unavailableReason: null,
+        },
+      },
+      ...overrides,
+    }
+  }
+
   beforeEach(() => {
     mocks.forecastBatchTasks.mockReset()
     mocks.getTaskDurationSuggestion.mockReset()
@@ -204,13 +237,11 @@ describe('baselineGenerationService v1.4.7.4 seed consumption', () => {
       } as any,
     ], [], new Set(), {
       forecastByTaskId: new Map([
-        ['task-e2', {
-          forecast_finish_date: '2026-05-18',
-          remaining_duration_days: 12,
-          confidence_level: 'medium',
-        }],
+        ['task-e2', authoritativeE2Forecast()],
       ]),
-    } as any)
+      constructionCalendar: authoritativeE2Calendar,
+      durationAsOfDate: '2026-05-09',
+    })
 
     expect(item.planned_start_date).toBe('2026-05-03')
     expect(item.planned_end_date).toBe('2026-05-18')
@@ -218,6 +249,141 @@ describe('baselineGenerationService v1.4.7.4 seed consumption', () => {
     expect(item.seed_versions?.[0]).toEqual(expect.objectContaining({
       dateSource: 'task_duration_forecast_e2',
     }))
+  })
+
+  it('requires current exact typed E2 authority before extending regenerated baseline dates', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-05-09T02:00:00.000Z'))
+    const frozenCalendar: ConstructionCalendarContext = {
+      basis: 'official_construction_calendar_seed',
+      windows: [],
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      availability: 'available',
+      unavailableReason: null,
+    }
+    mocks.resolveConstructionCalendarContext.mockResolvedValue(frozenCalendar)
+    mockSupabaseRows({
+      task_baselines: [],
+      task_baseline_items: [],
+      tasks: [
+        {
+          id: 'task-historical-e2',
+          project_id: 'project-baseline-e2-authority',
+          title: 'Historical E2 must not extend baseline',
+          planned_start_date: '2026-05-01',
+          planned_end_date: '2026-05-10',
+          actual_start_date: '2026-05-03',
+          status: 'in_progress',
+          progress: 40,
+          is_executable: true,
+          is_wbs_summary: false,
+          sort_order: 1,
+        },
+        {
+          id: 'task-untyped-current-e2',
+          project_id: 'project-baseline-e2-authority',
+          title: 'Untyped current E2 must not extend baseline',
+          planned_start_date: '2026-05-01',
+          planned_end_date: '2026-05-10',
+          actual_start_date: '2026-05-03',
+          status: 'in_progress',
+          progress: 40,
+          is_executable: true,
+          is_wbs_summary: false,
+          sort_order: 2,
+        },
+        {
+          id: 'task-authoritative-current-e2',
+          project_id: 'project-baseline-e2-authority',
+          title: 'Authoritative current E2 may extend baseline',
+          planned_start_date: '2026-05-01',
+          planned_end_date: '2026-05-10',
+          actual_start_date: '2026-05-03',
+          status: 'in_progress',
+          progress: 40,
+          is_executable: true,
+          is_wbs_summary: false,
+          sort_order: 3,
+        },
+      ],
+      task_duration_forecasts: [
+        {
+          task_id: 'task-historical-e2',
+          forecast_finish_date: '2026-05-18',
+          is_current: false,
+          generated_at: '2026-05-09T01:00:00.000Z',
+          metadata: {
+            remainingDuration: {
+              value: 10,
+              unit: 'construction_production_day',
+              calendarRef: 'work_calendar-old',
+              calendarVersion: 'calendar-v0',
+              timezone: 'Asia/Shanghai',
+              asOf: '2026-05-08',
+              availability: 'available',
+              unavailableReason: null,
+            },
+          },
+        },
+        {
+          task_id: 'task-untyped-current-e2',
+          forecast_finish_date: '2026-05-18',
+          is_current: true,
+          generated_at: '2026-05-09T01:00:00.000Z',
+          metadata: {},
+        },
+        {
+          task_id: 'task-authoritative-current-e2',
+          forecast_finish_date: '2026-05-18',
+          is_current: true,
+          generated_at: '2026-05-09T01:00:00.000Z',
+          metadata: {
+            remainingDuration: {
+              value: 10,
+              unit: 'construction_production_day',
+              calendarRef: 'work_calendar',
+              calendarVersion: 'calendar-v1',
+              timezone: 'Asia/Shanghai',
+              asOf: '2026-05-09',
+              availability: 'available',
+              unavailableReason: null,
+            },
+          },
+        },
+      ],
+    })
+    mocks.getProjectCriticalPathSnapshot.mockResolvedValue({
+      projectId: 'project-baseline-e2-authority',
+      displayTaskIds: [],
+      autoTaskIds: [],
+      manualAttentionTaskIds: [],
+      manualInsertedTaskIds: [],
+      watchedTaskIds: [],
+      primaryChain: null,
+      alternateChains: [],
+      edges: [],
+      tasks: [],
+      projectDurationDays: 0,
+      calculationStatus: 'fresh',
+    })
+    mocks.buildProjectCriticalPathSnapshot.mockRejectedValue(new Error('skip E3 rescheduling'))
+
+    try {
+      const preparation = await prepareBaselineGenerationForProject({
+        projectId: 'project-baseline-e2-authority',
+      })
+      const generatedByTaskId = new Map(
+        preparation.generatedItems.map((item) => [item.source_task_id, item]),
+      )
+
+      expect(generatedByTaskId.get('task-historical-e2')?.planned_end_date).toBe('2026-05-10')
+      expect(generatedByTaskId.get('task-untyped-current-e2')?.planned_end_date).toBe('2026-05-10')
+      expect(generatedByTaskId.get('task-authoritative-current-e2')?.planned_end_date).toBe('2026-05-18')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('applies bounded planning replay readback to baseline draft duration metadata without mutating facts', () => {
@@ -235,12 +401,10 @@ describe('baselineGenerationService v1.4.7.4 seed consumption', () => {
       } as any,
     ], [], new Set(), {
       forecastByTaskId: new Map([
-        ['task-replay-e2', {
-          forecast_finish_date: '2026-05-18',
-          remaining_duration_days: 12,
-          confidence_level: 'medium',
-        }],
+        ['task-replay-e2', authoritativeE2Forecast()],
       ]),
+      constructionCalendar: authoritativeE2Calendar,
+      durationAsOfDate: '2026-05-09',
       planningReplayReadbackByTaskId: new Map([
         ['task-replay-e2', {
           status: 'ready',
@@ -842,15 +1006,15 @@ describe('baselineGenerationService v1.4.7.4 seed consumption', () => {
       },
     ] as any, [], new Set(), {
       forecastByTaskId: new Map([
-        ['task-e2-provenance', {
-          forecast_finish_date: '2026-05-18',
-          remaining_duration_days: 12,
+        ['task-e2-provenance', authoritativeE2Forecast({
           confidence_level: 'high',
           duration_calibration_source: 'e2_runtime_forecast',
           duration_provenance: 'task_duration_forecast_service',
-        }],
+        })],
       ]),
-    } as any)
+      constructionCalendar: authoritativeE2Calendar,
+      durationAsOfDate: '2026-05-09',
+    })
 
     expect(items.find((item) => item.source_task_id === 'task-actual')?.generation_metadata).toEqual(expect.objectContaining({
       date_source: 'actual_execution',
