@@ -34,6 +34,7 @@ import { PROJECT_NAVIGATION_LABELS } from '@/config/navigation'
 import { LoadingState } from '@/components/ui/loading-state'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { Toaster } from '@/components/ui/toaster'
+import { LegalFooter } from '@/components/LegalFooter'
 
 const initialHash = typeof window !== 'undefined' ? window.location.hash : ''
 const initialRoutePath = initialHash.startsWith('#') ? initialHash.slice(1).split(/[?#]/)[0] : ''
@@ -423,6 +424,7 @@ function AppContent() {
               </Routes>
             </PageErrorBoundary>
           </div>
+          <LegalFooter />
         </main>
       </div>
       <Toaster />
