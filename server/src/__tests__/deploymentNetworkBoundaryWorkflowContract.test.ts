@@ -17,7 +17,7 @@ describe('private server network boundary contract', () => {
     expect(compose).toContain('127.0.0.1:${WEB_PORT:-8080}:80')
     expect(deployScript).toContain('External deployment health URL must use https://')
     expect(deployScript).toContain('strict-transport-security:')
-    expect(deployScript).toContain('Public HTTP endpoint did not redirect to HTTPS')
+    expect(deployScript).toContain('HTTP endpoint did not redirect to the HTTPS health authority.')
 
     const deployIndex = workflow.indexOf('name: Deploy to self-hosted server')
     const portProbeIndex = workflow.indexOf('name: Verify API port is not externally reachable')
