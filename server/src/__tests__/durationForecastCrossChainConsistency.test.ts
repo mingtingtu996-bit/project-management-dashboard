@@ -139,9 +139,15 @@ describe('duration forecast cross-chain consistency', () => {
         is_critical: true,
         total_float_days: 0,
         remaining_duration_days: 8,
+        remaining_duration: buildProductionDurationMetric(8),
         forecast_finish_date: '2026-07-20',
         forecast_p20_finish_date: '2026-07-17',
         forecast_p80_finish_date: '2026-07-24',
+        probability_duration_metrics: {
+          p20RemainingDuration: buildProductionDurationMetric(5),
+          p50RemainingDuration: buildProductionDurationMetric(8),
+          p80RemainingDuration: buildProductionDurationMetric(12),
+        },
       },
     }
     const taskForecast: TaskDurationForecast = {
