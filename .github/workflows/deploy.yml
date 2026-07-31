@@ -901,7 +901,9 @@ jobs:
           drop_guard_args=()
           for migration in \
             311_retire_product_runtime_progress_knowledge_governance.sql \
-            321_retire_duplicate_t2_schedule_runtime.sql; do
+            316_task_fact_write_integrity.sql \
+            321_retire_duplicate_t2_schedule_runtime.sql \
+            332_schedule_acceleration_adoption_hardening.sql; do
             if grep -Fqx -- "- $migration" <<< "$plan_output"; then
               drop_guard_args+=(--approve-existing-drop-targets-for "$migration")
             fi
