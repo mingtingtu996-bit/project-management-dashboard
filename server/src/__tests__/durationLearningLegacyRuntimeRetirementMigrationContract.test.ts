@@ -242,6 +242,22 @@ describe('duration learning legacy runtime retirement migration', () => {
     expect(runner).toContain('DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_PHASE_BOUNDARY')
   })
 
+  it('keeps the workflow readback marker authoritative over the detailed readback status', () => {
+    const runner = readSql('src/scripts/run-pending-migrations.ts')
+    const readbackStart = runner.indexOf(
+      'const readback = await verifyDurationLearningLegacyRuntimeRetirementReadback',
+    )
+    const spreadStart = runner.indexOf('...readback', readbackStart)
+    const workflowMarkerStart = runner.indexOf(
+      "status: 'DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_READBACK_COMPLETE'",
+      readbackStart,
+    )
+
+    expect(readbackStart).toBeGreaterThan(-1)
+    expect(spreadStart).toBeGreaterThan(readbackStart)
+    expect(workflowMarkerStart).toBeGreaterThan(spreadStart)
+  })
+
   it('requires effective target validation before any destructive 322 client or file access', () => {
     const runner = readSql('src/scripts/run-pending-migrations.ts')
     const backup = readSql('src/scripts/backup-duration-learning-legacy-runtime-retirement.ts')

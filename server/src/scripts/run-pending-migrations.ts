@@ -256,8 +256,8 @@ async function main() {
           (sql, values) => client.query(sql, values),
         )
         console.log(JSON.stringify({
-          status: 'DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_READBACK_COMPLETE',
           ...readback,
+          status: 'DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_READBACK_COMPLETE',
         }))
       }
       console.log(`已完成 ${migration.filename}`)
