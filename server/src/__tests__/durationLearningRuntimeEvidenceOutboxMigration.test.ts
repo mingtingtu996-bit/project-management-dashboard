@@ -179,6 +179,24 @@ describe('duration learning runtime evidence outbox migration', () => {
     expect(sql).toContain('GRANT EXECUTE ON FUNCTION public.persist_duration_learning_runtime_consumptions(JSONB)')
   })
 
+  it('closes the prediction-application failure CTE exactly once before the authority query', () => {
+    const sql = readSql('migrations', migrationName)
+    const predicateStart = sql.indexOf(
+      'CREATE OR REPLACE FUNCTION public.duration_learning_runtime_evidence_outbox_row_is_authorized(',
+    )
+    const predicateEnd = sql.indexOf(
+      'REVOKE ALL ON FUNCTION public.duration_learning_runtime_evidence_outbox_row_is_authorized(',
+      predicateStart,
+    )
+    const predicate = sql.slice(predicateStart, predicateEnd)
+
+    expect(predicateStart).toBeGreaterThanOrEqual(0)
+    expect(predicateEnd).toBeGreaterThan(predicateStart)
+    expect(predicate).toMatch(
+      /\) <> jsonb_array_length\(applications\.application -> 'inputTaskIds'\)\n  \)\nSELECT EXISTS \(/,
+    )
+  })
+
   it('has an explicit rollback that removes the two outbox relations and restores the 315 policy', () => {
     const rollback = readSql('migrations', 'rollback', migrationName)
 
