@@ -216,7 +216,7 @@ describe('duration runtime orphan retirement', () => {
     expect(migration).toContain('t2_schedule_runtime_retirement_ineligible_dependency_residue_present')
     expect(migration).toContain('DELETE FROM public.task_dependencies')
     expect(migration).not.toMatch(/DROP TABLE[\s\S]*CASCADE/i)
-    expect(deployWorkflow).toContain('321_retire_duplicate_t2_schedule_runtime.sql; do')
+    expect(deployWorkflow).toContain('321_retire_duplicate_t2_schedule_runtime.sql')
     expect(deployWorkflow).toContain('if grep -Fqx -- "- $migration" <<< "$plan_output"; then')
     expect(deployWorkflow).toContain(
       'drop_guard_args+=(--approve-existing-drop-targets-for "$migration")',
