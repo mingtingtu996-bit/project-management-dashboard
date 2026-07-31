@@ -771,7 +771,6 @@ WITH normalized AS (
            AND consumption.consumption_context ->> 'authoritySource' = 'runtime_resolver_publication_set'
        ) <> jsonb_array_length(applications.application -> 'inputTaskIds')
   )
-)
 SELECT EXISTS (
   SELECT 1
     FROM public.projects project
