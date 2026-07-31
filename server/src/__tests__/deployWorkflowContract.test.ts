@@ -258,7 +258,7 @@ describe('deploy workflow contract', () => {
     expect(applyIndex).toBeGreaterThan(confirmationIndex)
   })
 
-  it('only approves the 311 DROP when that migration is actually pending', () => {
+  it('only approves governed reversible DROP migrations when each migration is pending', () => {
     const workflow = readFileSync(resolve(workspaceRoot, '.github', 'workflows', 'deploy.yml'), 'utf8')
     const stepStart = workflow.indexOf('      - name: Preflight pending migration DROP targets')
     const stepEnd = workflow.indexOf('\n      - name:', stepStart + 10)
@@ -267,6 +267,14 @@ describe('deploy workflow contract', () => {
     expect(stepStart).toBeGreaterThan(-1)
     expect(dropStep).toContain('plan_output="$(npm run --silent migrate:plan)"')
     expect(dropStep).toContain('drop_guard_args=()')
+    for (const migration of [
+      '311_retire_product_runtime_progress_knowledge_governance.sql',
+      '316_task_fact_write_integrity.sql',
+      '321_retire_duplicate_t2_schedule_runtime.sql',
+      '332_schedule_acceleration_adoption_hardening.sql',
+    ]) {
+      expect(dropStep).toContain(migration)
+    }
     expect(dropStep).toContain('grep -Fqx -- "- $migration"')
     expect(dropStep).toContain(
       'drop_guard_args+=(--approve-existing-drop-targets-for "$migration")',
