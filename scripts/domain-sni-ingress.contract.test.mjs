@@ -24,6 +24,12 @@ function bashPath(url) {
   return pathname.replace(/^\/([A-Za-z]):/u, (_match, drive) => `/${drive.toLowerCase()}`)
 }
 
+const ensureFunctionalPython3 = `
+if [ "$(python3 -c 'print("ready")' 2>/dev/null || true)" != ready ]; then
+  python3() { python "$@"; }
+fi
+`
+
 function yamlStepRun(workflow, stepId) {
   const lines = workflow.split(/\r?\n/u)
   const idIndex = lines.findIndex((line) => line.trim() === `id: ${stepId}`)
@@ -164,6 +170,343 @@ test('provisioning validates a candidate, activates atomically, classifies boots
   assert.doesNotMatch(workflow, /ssh-keyscan|StrictHostKeyChecking=no/u)
 })
 
+test('initial activation checkpoints and stops only the governed legacy overlay before Caddy starts', async () => {
+  const [script, workflow] = await Promise.all([
+    source('scripts/provision-lighthouse-domain-ingress.sh'),
+    source('.github/workflows/provision-domain-ingress.yml'),
+  ])
+  const stopOverlayFunction = script.match(
+    /(stop_legacy_overlay_for_activation\(\) \{[\s\S]*?\n\})\n\nverify_legacy_overlay_stopped/u,
+  )?.[1]
+  const writeActivationState = script.match(
+    /(write_activation_state\(\) \{[\s\S]*?\n\})\n\nprobe_redirect/u,
+  )?.[1]
+  assert.ok(stopOverlayFunction, 'legacy overlay stop function must remain executable in isolation')
+  assert.ok(writeActivationState, 'activation checkpoint writer must remain executable in isolation')
+
+  assert.match(workflow, /LEGACY_OVERLAY_CONTAINER:\s*project-management-web/u)
+  assert.match(workflow, /LEGACY_OVERLAY_COMPOSE_PROJECT:\s*deploy/u)
+  assert.match(workflow, /LEGACY_OVERLAY_COMPOSE_SERVICE:\s*web/u)
+  assert.match(workflow, /LEGACY_OVERLAY_IMAGE_PREFIX:\s*deploy-web:icp-overlay-/u)
+  assert.match(script, /printf 'LEGACY_OVERLAY_WAS_RUNNING=%q\\n'/u)
+  assert.match(script, /printf 'LEGACY_OVERLAY_CONTAINER=%q\\n'/u)
+  assert.match(script, /printf 'LEGACY_OVERLAY_CONTAINER_ID=%q\\n'/u)
+  assert.match(
+    workflow,
+    /LEGACY_OVERLAY_CONTAINER=\$LEGACY_OVERLAY_CONTAINER LEGACY_OVERLAY_COMPOSE_PROJECT=\$LEGACY_OVERLAY_COMPOSE_PROJECT LEGACY_OVERLAY_COMPOSE_SERVICE=\$LEGACY_OVERLAY_COMPOSE_SERVICE LEGACY_OVERLAY_IMAGE_PREFIX=\$LEGACY_OVERLAY_IMAGE_PREFIX/u,
+  )
+
+  const activationSequence = script.slice(script.indexOf('mv "$CANDIDATE_DIR" "$RELEASE_DIR"'))
+  const checkpoint = activationSequence.indexOf('write_activation_state')
+  const stopOverlay = activationSequence.indexOf('stop_legacy_overlay_for_activation')
+  const startCaddy = activationSequence.indexOf('compose_up "$RELEASE_DIR"')
+  assert.ok(checkpoint >= 0 && checkpoint < stopOverlay && stopOverlay < startCaddy)
+
+  const sha = '1'.repeat(40)
+  const bashScript = `
+set -euo pipefail
+ROOT_DIR="$(mktemp -d)"
+trap 'rm -rf "$ROOT_DIR"' EXIT
+STATE_FILE="$ROOT_DIR/pending-activation.env"
+RELEASE_SHA=${sha}
+RELEASE_DIR="$ROOT_DIR/releases/$RELEASE_SHA"
+PREVIOUS_TARGET=
+LEGACY_OVERLAY_WAS_RUNNING=true
+LEGACY_OVERLAY_CONTAINER=project-management-web
+LEGACY_OVERLAY_CONTAINER_ID=overlay-id
+printf true > "$ROOT_DIR/overlay-running"
+docker() {
+  if [ "$1" = stop ] && [ "$2" = overlay-id ]; then
+    test -f "$STATE_FILE"
+    printf false > "$ROOT_DIR/overlay-running"
+    printf '%s' "$2" > "$ROOT_DIR/overlay-stopped"
+    return 0
+  fi
+  return 97
+}
+inspect_legacy_overlay() {
+  printf 'overlay-id\t%s' "$(cat "$ROOT_DIR/overlay-running")"
+}
+assert_host_port_80_free() { return 0; }
+${stopOverlayFunction}
+${writeActivationState}
+write_activation_state
+stop_legacy_overlay_for_activation
+test -f "$ROOT_DIR/overlay-stopped"
+`
+  const result = runBash(bashScript)
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
+})
+
+test('initial handoff rejects a legacy overlay while a governed current target still exists', async () => {
+  const script = await source('scripts/provision-lighthouse-domain-ingress.sh')
+  const overlayFunctions = script.match(
+    /(inspect_legacy_overlay\(\) \{[\s\S]*?\n\})\n\natomic_link/u,
+  )?.[1]
+  assert.ok(overlayFunctions, 'legacy overlay handoff functions must remain executable in isolation')
+
+  const result = runBash(`
+set -euo pipefail
+BOOTSTRAP_MODE=initial
+PREVIOUS_TARGET=/opt/workbuddy-ingress/releases/previous
+LEGACY_OVERLAY_CONTAINER=project-management-web
+LEGACY_OVERLAY_COMPOSE_PROJECT=deploy
+LEGACY_OVERLAY_COMPOSE_SERVICE=web
+LEGACY_OVERLAY_IMAGE_PREFIX=deploy-web:icp-overlay-
+docker() {
+  if [ "$1" = ps ]; then printf '%s\n' overlay-id; return 0; fi
+  if [ "$1" = container ] && [ "$2" = inspect ]; then
+    printf '%s\n' '[{"Id":"overlay-id","Name":"/project-management-web","State":{"Running":true},"Config":{"Image":"deploy-web:icp-overlay-old","Labels":{"com.docker.compose.project":"deploy","com.docker.compose.service":"web"}},"HostConfig":{"PortBindings":{"80/tcp":[{"HostIp":"0.0.0.0","HostPort":"80"}]}},"NetworkSettings":{"Ports":{"80/tcp":[{"HostIp":"0.0.0.0","HostPort":"80"}]}}}]'
+    return 0
+  fi
+  return 97
+}
+ss() { return 0; }
+${ensureFunctionalPython3}
+${overlayFunctions}
+if prepare_legacy_overlay_handoff; then exit 91; fi
+test "$LEGACY_OVERLAY_WAS_RUNNING" = false
+`)
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
+})
+
+test('initial legacy overlay handoff rejects arbitrary port owners while upgrade never consumes it', async () => {
+  const script = await source('scripts/provision-lighthouse-domain-ingress.sh')
+  const overlayFunctions = script.match(
+    /(inspect_legacy_overlay\(\) \{[\s\S]*?\n\})\n\natomic_link/u,
+  )?.[1]
+  assert.ok(overlayFunctions, 'legacy overlay handoff functions must remain executable in isolation')
+
+  const result = runBash(`
+set -euo pipefail
+LEGACY_OVERLAY_CONTAINER=project-management-web
+LEGACY_OVERLAY_COMPOSE_PROJECT=deploy
+LEGACY_OVERLAY_COMPOSE_SERVICE=web
+LEGACY_OVERLAY_IMAGE_PREFIX=deploy-web:icp-overlay-
+${ensureFunctionalPython3}
+mode=unrelated
+docker() {
+  if [ "$1" = ps ]; then
+    if [ "$mode" != listener ] && [ "$mode" != ss_failure ]; then printf '%s\n' owner-id; fi
+    return 0
+  fi
+  if [ "$1" = container ] && [ "$2" = inspect ]; then
+    if [ "$mode" = unrelated ]; then
+      printf '%s\n' '[{"Id":"owner-id","Name":"/unrelated-web","State":{"Running":true},"Config":{"Image":"unrelated:latest","Labels":{}},"NetworkSettings":{"Ports":{"80/tcp":[{"HostIp":"0.0.0.0","HostPort":"80"}]}}}]'
+    else
+      printf '%s\n' '[{"Id":"owner-id","Name":"/project-management-web","State":{"Running":true},"Config":{"Image":"deploy-web:icp-overlay-old","Labels":{"com.docker.compose.project":"deploy","com.docker.compose.service":"wrong-service"}},"NetworkSettings":{"Ports":{"80/tcp":[{"HostIp":"0.0.0.0","HostPort":"80"}]}}}]'
+    fi
+    return 0
+  fi
+  return 97
+}
+ss() {
+  if [ "$mode" = listener ]; then printf '%s\n' 'LISTEN 0 4096 0.0.0.0:80'; return 0; fi
+  if [ "$mode" = ss_failure ]; then return 41; fi
+  return 0
+}
+${overlayFunctions}
+BOOTSTRAP_MODE=initial
+if prepare_legacy_overlay_handoff; then exit 91; fi
+mode=mismatched
+if prepare_legacy_overlay_handoff; then exit 92; fi
+mode=listener
+if prepare_legacy_overlay_handoff; then exit 93; fi
+mode=ss_failure
+if prepare_legacy_overlay_handoff; then exit 94; fi
+docker() { return 97; }
+ss() { return 97; }
+BOOTSTRAP_MODE=upgrade
+prepare_legacy_overlay_handoff
+test "$LEGACY_OVERLAY_WAS_RUNNING" = false
+`)
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
+})
+
+test('legacy overlay discovery distinguishes host port 80 from a runtime target port 80', async () => {
+  const script = await source('scripts/provision-lighthouse-domain-ingress.sh')
+  const overlayFunctions = script.match(
+    /(inspect_legacy_overlay\(\) \{[\s\S]*?\n\})\n\natomic_link/u,
+  )?.[1]
+  assert.ok(overlayFunctions, 'legacy overlay handoff functions must remain executable in isolation')
+
+  const result = runBash(`
+set -euo pipefail
+BOOTSTRAP_MODE=initial
+LEGACY_OVERLAY_CONTAINER=project-management-web
+LEGACY_OVERLAY_COMPOSE_PROJECT=deploy
+LEGACY_OVERLAY_COMPOSE_SERVICE=web
+LEGACY_OVERLAY_IMAGE_PREFIX=deploy-web:icp-overlay-
+docker() {
+  if [ "$1" = ps ]; then printf '%s\n' runtime-web-id; return 0; fi
+  if [ "$1" = container ] && [ "$2" = inspect ]; then
+    printf '%s\n' '[{"Id":"runtime-web-id","Name":"/workbuddy-production-web","State":{"Running":true},"Config":{"Image":"workbuddy-web:release","Labels":{"com.docker.compose.project":"workbuddy-production","com.docker.compose.service":"web"}},"NetworkSettings":{"Ports":{"80/tcp":[{"HostIp":"127.0.0.1","HostPort":"8080"}]}}}]'
+    return 0
+  fi
+  return 97
+}
+ss() { return 0; }
+${ensureFunctionalPython3}
+${overlayFunctions}
+prepare_legacy_overlay_handoff
+test "$LEGACY_OVERLAY_WAS_RUNNING" = false
+test -z "$LEGACY_OVERLAY_CONTAINER_ID"
+`)
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
+})
+
+test('initial rollback restarts the exact legacy overlay before clearing its CAS checkpoint', async () => {
+  const script = await source('scripts/provision-lighthouse-domain-ingress.sh')
+  const inspectOverlay = script.match(
+    /(inspect_legacy_overlay\(\) \{[\s\S]*?\n\})\n\nrunning_port_80_containers/u,
+  )?.[1]
+  const restoreOverlay = script.match(
+    /(restore_legacy_overlay\(\) \{[\s\S]*?\n\})\n\natomic_link/u,
+  )?.[1]
+  const rollbackFunction = script.match(/(rollback\(\) \{[\s\S]*?\n\})\n\nwrite_committed_state/u)?.[1]
+  assert.ok(inspectOverlay, 'legacy overlay inspector must remain executable in isolation')
+  assert.ok(restoreOverlay, 'legacy overlay restorer must remain executable in isolation')
+  assert.ok(rollbackFunction, 'rollback must remain executable in isolation')
+
+  const sha = '2'.repeat(40)
+  const result = runBash(`
+set -euo pipefail
+ROOT_DIR="$(mktemp -d)"
+trap 'rm -rf "$ROOT_DIR"' EXIT
+STATE_FILE="$ROOT_DIR/pending-activation.env"
+active="$ROOT_DIR/releases/${sha}"
+mkdir -p "$active"
+cat > "$STATE_FILE" <<STATE
+ACTIVATED_SHA=${sha}
+ACTIVATED_TARGET=$active
+PREVIOUS_TARGET=
+LEGACY_OVERLAY_WAS_RUNNING=true
+LEGACY_OVERLAY_CONTAINER=project-management-web
+LEGACY_OVERLAY_CONTAINER_ID=overlay-id
+STATE
+LEGACY_OVERLAY_COMPOSE_PROJECT=deploy
+LEGACY_OVERLAY_COMPOSE_SERVICE=web
+LEGACY_OVERLAY_IMAGE_PREFIX=deploy-web:icp-overlay-
+printf false > "$ROOT_DIR/overlay-running"
+docker() {
+  if [ "$1" = container ] && [ "$2" = inspect ]; then
+    printf '[{"Id":"overlay-id","Name":"/project-management-web","State":{"Running":%s},"Config":{"Image":"deploy-web:icp-overlay-${sha}","Labels":{"com.docker.compose.project":"deploy","com.docker.compose.service":"web"}},"NetworkSettings":{"Ports":{"80/tcp":[{"HostIp":"0.0.0.0","HostPort":"80"}]}}}]\n' "$(cat "$ROOT_DIR/overlay-running")"
+    return 0
+  fi
+  if [ "$1" = start ] && [ "$2" = overlay-id ]; then
+    test -f "$STATE_FILE"
+    printf true > "$ROOT_DIR/overlay-running"
+    printf '%s' "$2" > "$ROOT_DIR/overlay-restarted"
+    return 0
+  fi
+  return 97
+}
+${ensureFunctionalPython3}
+${inspectOverlay}
+${restoreOverlay}
+require_sha() { [[ "$1" =~ ^[0-9a-f]{40}$ ]]; }
+load_state() { source "$STATE_FILE"; }
+readlink() { return 1; }
+compose_down() { return 0; }
+verify_ingress_stopped() { return 0; }
+${rollbackFunction}
+FAILED_RELEASE_SHA=${sha} rollback
+test "$(cat "$ROOT_DIR/overlay-restarted")" = overlay-id
+test ! -f "$STATE_FILE"
+`)
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
+})
+
+test('legacy overlay restore failure preserves the pending activation checkpoint', async () => {
+  const script = await source('scripts/provision-lighthouse-domain-ingress.sh')
+  const inspectOverlay = script.match(
+    /(inspect_legacy_overlay\(\) \{[\s\S]*?\n\})\n\nrunning_port_80_containers/u,
+  )?.[1]
+  const restoreOverlay = script.match(
+    /(restore_legacy_overlay\(\) \{[\s\S]*?\n\})\n\natomic_link/u,
+  )?.[1]
+  const rollbackFunction = script.match(/(rollback\(\) \{[\s\S]*?\n\})\n\nwrite_committed_state/u)?.[1]
+  assert.ok(inspectOverlay, 'legacy overlay inspector must remain executable in isolation')
+  assert.ok(restoreOverlay, 'legacy overlay restorer must remain executable in isolation')
+  assert.ok(rollbackFunction, 'rollback must remain executable in isolation')
+
+  const sha = '3'.repeat(40)
+  const result = runBash(`
+set -euo pipefail
+ROOT_DIR="$(mktemp -d)"
+trap 'rm -rf "$ROOT_DIR"' EXIT
+STATE_FILE="$ROOT_DIR/pending-activation.env"
+active="$ROOT_DIR/releases/${sha}"
+mkdir -p "$active"
+cat > "$STATE_FILE" <<STATE
+ACTIVATED_SHA=${sha}
+ACTIVATED_TARGET=$active
+PREVIOUS_TARGET=
+LEGACY_OVERLAY_WAS_RUNNING=true
+LEGACY_OVERLAY_CONTAINER=project-management-web
+LEGACY_OVERLAY_CONTAINER_ID=overlay-id
+STATE
+LEGACY_OVERLAY_COMPOSE_PROJECT=deploy
+LEGACY_OVERLAY_COMPOSE_SERVICE=web
+LEGACY_OVERLAY_IMAGE_PREFIX=deploy-web:icp-overlay-
+${ensureFunctionalPython3}
+docker() {
+  if [ "$1" = container ] && [ "$2" = inspect ]; then
+    printf '%s\n' '[{"Id":"overlay-id","Name":"/project-management-web","State":{"Running":false},"Config":{"Image":"deploy-web:icp-overlay-old","Labels":{"com.docker.compose.project":"deploy","com.docker.compose.service":"web"}},"NetworkSettings":{"Ports":{"80/tcp":[{"HostIp":"0.0.0.0","HostPort":"80"}]}}}]'
+    return 0
+  fi
+  if [ "$1" = start ]; then return 41; fi
+  return 97
+}
+${inspectOverlay}
+${restoreOverlay}
+require_sha() { [[ "$1" =~ ^[0-9a-f]{40}$ ]]; }
+load_state() { source "$STATE_FILE"; }
+readlink() { return 1; }
+compose_down() { return 0; }
+verify_ingress_stopped() { return 0; }
+${rollbackFunction}
+FAILED_RELEASE_SHA=${sha} rollback || true
+test -f "$STATE_FILE"
+test -d "$active"
+`)
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
+})
+
+test('pending legacy overlay state cannot inherit a missing container identity from process defaults', async () => {
+  const script = await source('scripts/provision-lighthouse-domain-ingress.sh')
+  const loadState = script.match(
+    /(load_state\(\) \{[\s\S]*?\n\})\n\nwrite_activation_state/u,
+  )?.[1]
+  assert.ok(loadState, 'pending activation reader must remain executable in isolation')
+
+  const sha = '5'.repeat(40)
+  const result = runBash(`
+set -euo pipefail
+ROOT_DIR="$(mktemp -d)"
+trap 'rm -rf "$ROOT_DIR"' EXIT
+STATE_FILE="$ROOT_DIR/pending-activation.env"
+LEGACY_OVERLAY_CONTAINER=project-management-web
+cat > "$STATE_FILE" <<STATE
+ACTIVATED_SHA=${sha}
+ACTIVATED_TARGET=$ROOT_DIR/releases/${sha}
+PREVIOUS_TARGET=
+LEGACY_OVERLAY_WAS_RUNNING=true
+LEGACY_OVERLAY_CONTAINER_ID=overlay-id
+STATE
+${loadState}
+if (load_state); then exit 91; fi
+`)
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
+})
+
 test('public ingress probe workflow is valid Bash after YAML block scalar decoding', async () => {
   const workflow = await source('.github/workflows/provision-domain-ingress.yml')
   const publicProbe = yamlStepRun(workflow, 'public-probe')
@@ -245,6 +588,7 @@ STATE
 require_sha() { [[ "$1" =~ ^[0-9a-f]{40}$ ]]; }
 require_boolean() { case "$2" in true|false) ;; *) return 2 ;; esac; }
 load_state() { source "$STATE_FILE"; }
+verify_legacy_overlay_stopped() { return 0; }
 readlink() {
   if [ "$1" = -f ] && [ -f "$2-target" ]; then cat "$2-target"; return 0; fi
   command readlink "$@"

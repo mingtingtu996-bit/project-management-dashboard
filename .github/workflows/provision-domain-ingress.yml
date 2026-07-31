@@ -46,6 +46,10 @@ jobs:
       STAGING_HOST: ${{ vars.STAGING_DEPLOY_PUBLIC_HOST || 'staging.zhuxucloud.com' }}
       PRODUCTION_PROJECT_REF: wwdrkjnbvcbfytwnnyvs
       STAGING_PROJECT_REF: xemqmqpifsstkovbkatp
+      LEGACY_OVERLAY_CONTAINER: project-management-web
+      LEGACY_OVERLAY_COMPOSE_PROJECT: deploy
+      LEGACY_OVERLAY_COMPOSE_SERVICE: web
+      LEGACY_OVERLAY_IMAGE_PREFIX: deploy-web:icp-overlay-
       DEPLOY_HOST: ${{ secrets.PRODUCTION_DEPLOY_HOST }}
       DEPLOY_USER: ${{ secrets.PRODUCTION_DEPLOY_USER }}
       DEPLOY_PORT: ${{ secrets.PRODUCTION_DEPLOY_PORT || '22' }}
@@ -119,7 +123,7 @@ jobs:
             "$archive" "$DEPLOY_USER@$DEPLOY_HOST:$remote_archive"
           ssh -p "$DEPLOY_PORT" -i ~/.ssh/workbuddy-domain-ingress -o IdentitiesOnly=yes \
             "$DEPLOY_USER@$DEPLOY_HOST" \
-            "sudo -n env ACTION=activate RELEASE_SHA=$RELEASE_SHA RELEASE_ARCHIVE=$remote_archive PRODUCTION_HOST=$PRODUCTION_HOST STAGING_HOST=$STAGING_HOST BOOTSTRAP_MODE=$BOOTSTRAP_MODE bash -s" \
+            "sudo -n env ACTION=activate RELEASE_SHA=$RELEASE_SHA RELEASE_ARCHIVE=$remote_archive PRODUCTION_HOST=$PRODUCTION_HOST STAGING_HOST=$STAGING_HOST BOOTSTRAP_MODE=$BOOTSTRAP_MODE LEGACY_OVERLAY_CONTAINER=$LEGACY_OVERLAY_CONTAINER LEGACY_OVERLAY_COMPOSE_PROJECT=$LEGACY_OVERLAY_COMPOSE_PROJECT LEGACY_OVERLAY_COMPOSE_SERVICE=$LEGACY_OVERLAY_COMPOSE_SERVICE LEGACY_OVERLAY_IMAGE_PREFIX=$LEGACY_OVERLAY_IMAGE_PREFIX bash -s" \
             < scripts/provision-lighthouse-domain-ingress.sh
 
       - name: Verify both domains directly through the governed origin
