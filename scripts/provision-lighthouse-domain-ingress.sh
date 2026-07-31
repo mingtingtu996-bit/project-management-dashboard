@@ -11,6 +11,13 @@ EXPECTED_PRODUCTION_HOST="${EXPECTED_PRODUCTION_HOST:-zhuxucloud.com}"
 EXPECTED_STAGING_HOST="${EXPECTED_STAGING_HOST:-staging.zhuxucloud.com}"
 PRODUCTION_PROJECT_REF="${PRODUCTION_PROJECT_REF:-wwdrkjnbvcbfytwnnyvs}"
 STAGING_PROJECT_REF="${STAGING_PROJECT_REF:-xemqmqpifsstkovbkatp}"
+LEGACY_OVERLAY_CONTAINER="${LEGACY_OVERLAY_CONTAINER:-project-management-web}"
+LEGACY_OVERLAY_COMPOSE_PROJECT="${LEGACY_OVERLAY_COMPOSE_PROJECT:-deploy}"
+LEGACY_OVERLAY_COMPOSE_SERVICE="${LEGACY_OVERLAY_COMPOSE_SERVICE:-web}"
+LEGACY_OVERLAY_IMAGE_PREFIX="${LEGACY_OVERLAY_IMAGE_PREFIX:-deploy-web:icp-overlay-}"
+CONFIGURED_LEGACY_OVERLAY_CONTAINER="$LEGACY_OVERLAY_CONTAINER"
+LEGACY_OVERLAY_WAS_RUNNING=false
+LEGACY_OVERLAY_CONTAINER_ID=
 
 command -v python3 >/dev/null 2>&1 || {
   echo "python3 is required on the ingress host." >&2
@@ -67,6 +74,160 @@ compose_down() {
     down
 }
 
+inspect_legacy_overlay() {
+  local expected_id="${1:-}"
+  docker container inspect "$LEGACY_OVERLAY_CONTAINER" | python3 -c '
+import json
+import sys
+
+expected_name, expected_project, expected_service, image_prefix, expected_id = sys.argv[1:]
+payload = json.load(sys.stdin)
+if len(payload) != 1:
+    raise SystemExit(1)
+container = payload[0]
+labels = (container.get("Config") or {}).get("Labels") or {}
+configured_ports = (container.get("HostConfig") or {}).get("PortBindings") or {}
+active_ports = (container.get("NetworkSettings") or {}).get("Ports") or {}
+bindings = configured_ports.get("80/tcp") or active_ports.get("80/tcp") or []
+container_id = str(container.get("Id") or "")
+running = (container.get("State") or {}).get("Running") is True
+if (str(container.get("Name") or "").removeprefix("/") != expected_name
+        or not str((container.get("Config") or {}).get("Image") or "").startswith(image_prefix)
+        or labels.get("com.docker.compose.project") != expected_project
+        or labels.get("com.docker.compose.service") != expected_service
+        or not container_id
+        or (expected_id and container_id != expected_id)
+        or not any(str(binding.get("HostPort") or "") == "80" for binding in bindings)):
+    raise SystemExit(1)
+print(f"{container_id}\t{str(running).lower()}", end="")
+' "$LEGACY_OVERLAY_CONTAINER" "$LEGACY_OVERLAY_COMPOSE_PROJECT" \
+    "$LEGACY_OVERLAY_COMPOSE_SERVICE" "$LEGACY_OVERLAY_IMAGE_PREFIX" "$expected_id"
+}
+
+running_port_80_containers() {
+  local id id_output
+  local ids=()
+  id_output="$(docker ps -q)" || return 1
+  while IFS= read -r id; do
+    if [ -n "$id" ]; then ids+=("$id"); fi
+  done <<< "$id_output"
+  [ "${#ids[@]}" -gt 0 ] || return 0
+  docker container inspect "${ids[@]}" | python3 -c '
+import json
+import sys
+
+containers = json.load(sys.stdin)
+owners = []
+for container in containers:
+    if (container.get("State") or {}).get("Running") is not True:
+        continue
+    bindings_by_port = (container.get("NetworkSettings") or {}).get("Ports") or {}
+    owns_host_port_80 = any(
+        str(binding.get("HostPort") or "") == "80"
+        for bindings in bindings_by_port.values()
+        for binding in (bindings or [])
+    )
+    if owns_host_port_80:
+        name = str(container.get("Name") or "").removeprefix("/")
+        if not name:
+            raise SystemExit(1)
+        owners.append(name)
+print("\n".join(sorted(owners)), end="")
+'
+}
+
+assert_host_port_80_free() {
+  local listeners owners
+  owners="$(running_port_80_containers)" || return 1
+  [ -z "$owners" ] || {
+    echo "Host port 80 is still published by an unexpected container." >&2
+    return 1
+  }
+  command -v ss >/dev/null 2>&1 || {
+    echo "ss is required to verify host port 80 ownership." >&2
+    return 2
+  }
+  if ! listeners="$(ss -H -ltn 'sport = :80' 2>/dev/null)"; then
+    echo "Host port 80 listener inspection failed." >&2
+    return 1
+  fi
+  if [ -n "$listeners" ]; then
+    echo "Host port 80 is occupied by a non-governed listener." >&2
+    return 1
+  fi
+}
+
+prepare_legacy_overlay_handoff() {
+  local owners identity
+  local expected_container="${CONFIGURED_LEGACY_OVERLAY_CONTAINER:-$LEGACY_OVERLAY_CONTAINER}"
+  LEGACY_OVERLAY_WAS_RUNNING=false
+  LEGACY_OVERLAY_CONTAINER=
+  LEGACY_OVERLAY_CONTAINER_ID=
+  [ "$BOOTSTRAP_MODE" = initial ] || return 0
+
+  owners="$(running_port_80_containers)" || return 1
+  if [ -z "$owners" ]; then
+    assert_host_port_80_free
+    return
+  fi
+  [ "$owners" = "$expected_container" ] || {
+    echo "Initial ingress found an ungoverned container publishing host port 80." >&2
+    return 1
+  }
+  [ -z "${PREVIOUS_TARGET:-}" ] || {
+    echo "Initial legacy overlay handoff is ambiguous while a governed current ingress target exists." >&2
+    return 1
+  }
+  LEGACY_OVERLAY_CONTAINER="$expected_container"
+  identity="$(inspect_legacy_overlay)" || {
+    echo "The port-80 legacy overlay does not match the governed identity." >&2
+    return 1
+  }
+  IFS=$'\t' read -r LEGACY_OVERLAY_CONTAINER_ID running <<< "$identity"
+  [ "$running" = true ] || {
+    echo "The governed legacy overlay is not running." >&2
+    return 1
+  }
+  LEGACY_OVERLAY_WAS_RUNNING=true
+}
+
+stop_legacy_overlay_for_activation() {
+  local identity running=false
+  [ "$LEGACY_OVERLAY_WAS_RUNNING" = true ] || return 0
+  identity="$(inspect_legacy_overlay "$LEGACY_OVERLAY_CONTAINER_ID")" || return 1
+  IFS=$'\t' read -r _ running <<< "$identity"
+  [ "$running" = true ] || {
+    echo "The governed legacy overlay changed state before handoff." >&2
+    return 1
+  }
+  docker stop "$LEGACY_OVERLAY_CONTAINER_ID" >/dev/null || return 1
+  identity="$(inspect_legacy_overlay "$LEGACY_OVERLAY_CONTAINER_ID")" || return 1
+  IFS=$'\t' read -r _ running <<< "$identity"
+  [ "$running" = false ] || return 1
+  assert_host_port_80_free
+}
+
+verify_legacy_overlay_stopped() {
+  local identity running=false
+  [ "$LEGACY_OVERLAY_WAS_RUNNING" = true ] || return 0
+  identity="$(inspect_legacy_overlay "$LEGACY_OVERLAY_CONTAINER_ID")" || return 1
+  IFS=$'\t' read -r _ running <<< "$identity"
+  [ "$running" = false ]
+}
+
+restore_legacy_overlay() {
+  local identity running=false
+  [ "$LEGACY_OVERLAY_WAS_RUNNING" = true ] || return 0
+  identity="$(inspect_legacy_overlay "$LEGACY_OVERLAY_CONTAINER_ID")" || return 1
+  IFS=$'\t' read -r _ running <<< "$identity"
+  if [ "$running" = false ]; then
+    docker start "$LEGACY_OVERLAY_CONTAINER_ID" >/dev/null || return 1
+  fi
+  identity="$(inspect_legacy_overlay "$LEGACY_OVERLAY_CONTAINER_ID")" || return 1
+  IFS=$'\t' read -r _ running <<< "$identity"
+  [ "$running" = true ] || return 1
+}
+
 atomic_link() {
   local target="$1"
   ln -sfn "$target" "$ROOT_DIR/current.next" || return 1
@@ -74,15 +235,40 @@ atomic_link() {
 }
 
 load_state() {
+  local expected_container="${CONFIGURED_LEGACY_OVERLAY_CONTAINER:-$LEGACY_OVERLAY_CONTAINER}"
   [ -f "$STATE_FILE" ] || {
     echo "No pending ingress activation exists." >&2
     exit 2
   }
+  ACTIVATED_TARGET=
+  ACTIVATED_SHA=
+  PREVIOUS_TARGET=
+  LEGACY_OVERLAY_WAS_RUNNING=false
+  LEGACY_OVERLAY_CONTAINER=
+  LEGACY_OVERLAY_CONTAINER_ID=
   # shellcheck disable=SC1090
   source "$STATE_FILE"
   : "${ACTIVATED_TARGET:?pending activation is missing ACTIVATED_TARGET}"
   : "${ACTIVATED_SHA:?pending activation is missing ACTIVATED_SHA}"
   PREVIOUS_TARGET="${PREVIOUS_TARGET:-}"
+  LEGACY_OVERLAY_WAS_RUNNING="${LEGACY_OVERLAY_WAS_RUNNING:-false}"
+  LEGACY_OVERLAY_CONTAINER="${LEGACY_OVERLAY_CONTAINER:-}"
+  LEGACY_OVERLAY_CONTAINER_ID="${LEGACY_OVERLAY_CONTAINER_ID:-}"
+  case "$LEGACY_OVERLAY_WAS_RUNNING" in
+    true)
+      : "${LEGACY_OVERLAY_CONTAINER:?pending activation is missing LEGACY_OVERLAY_CONTAINER}"
+      : "${LEGACY_OVERLAY_CONTAINER_ID:?pending activation is missing LEGACY_OVERLAY_CONTAINER_ID}"
+      [ "$LEGACY_OVERLAY_CONTAINER" = "$expected_container" ] || {
+        echo "Pending activation legacy overlay does not match the governed container." >&2
+        return 2
+      }
+      ;;
+    false) ;;
+    *)
+      echo "Pending activation has an invalid legacy overlay running state." >&2
+      return 2
+      ;;
+  esac
 }
 
 write_activation_state() {
@@ -92,6 +278,9 @@ write_activation_state() {
     printf 'ACTIVATED_SHA=%q\n' "$RELEASE_SHA"
     printf 'ACTIVATED_TARGET=%q\n' "$RELEASE_DIR"
     printf 'PREVIOUS_TARGET=%q\n' "$PREVIOUS_TARGET"
+    printf 'LEGACY_OVERLAY_WAS_RUNNING=%q\n' "${LEGACY_OVERLAY_WAS_RUNNING:-false}"
+    printf 'LEGACY_OVERLAY_CONTAINER=%q\n' "${LEGACY_OVERLAY_CONTAINER:-}"
+    printf 'LEGACY_OVERLAY_CONTAINER_ID=%q\n' "${LEGACY_OVERLAY_CONTAINER_ID:-}"
   } > "$state_candidate"; then
     rm -f "$state_candidate"
     return 1
@@ -257,6 +446,10 @@ rollback() {
       echo "Initial ingress did not stop cleanly; rollback remains pending." >&2
       return 1
     }
+    restore_legacy_overlay || {
+      echo "Legacy overlay restoration failed; rollback remains pending." >&2
+      return 1
+    }
   fi
   if [[ "$ACTIVATED_TARGET" == "$ROOT_DIR/releases/"* ]] && [ -d "$ACTIVATED_TARGET" ]; then
     mkdir -p "$ROOT_DIR/failed" || return 1
@@ -314,6 +507,10 @@ commit_activation() {
   [ "$(readlink -f "$ROOT_DIR/current" 2>/dev/null || true)" = "$ACTIVATED_TARGET" ] || {
     echo "Current ingress release changed; refusing stale commit." >&2
     exit 2
+  }
+  verify_legacy_overlay_stopped || {
+    echo "Legacy overlay is no longer stopped; refusing ingress commit." >&2
+    return 1
   }
   write_committed_state "$activated_sha" "$origin_ready" "$public_ready" || return
   rm -f "$STATE_FILE"
@@ -405,6 +602,7 @@ resolve_previous_target() {
 RELEASE_DIR="$ROOT_DIR/releases/$RELEASE_SHA"
 CANDIDATE_DIR="$ROOT_DIR/.candidate-$RELEASE_SHA-$$"
 PREVIOUS_TARGET="$(resolve_previous_target)"
+prepare_legacy_overlay_handoff
 ACTIVATED=false
 
 restore_on_failure() {
@@ -496,6 +694,7 @@ mkdir -p "$ROOT_DIR/releases"
 write_ingress_env "$RELEASE_DIR" "$CANDIDATE_DIR/env/ingress.env"
 mv "$CANDIDATE_DIR" "$RELEASE_DIR"
 write_activation_state
+stop_legacy_overlay_for_activation
 atomic_link "$RELEASE_DIR"
 ACTIVATED=true
 compose_up "$RELEASE_DIR"
