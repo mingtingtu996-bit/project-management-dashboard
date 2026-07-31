@@ -382,17 +382,6 @@ BEGIN
 END;
 $$;
 
-DO $$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
-    ALTER FUNCTION public.archive_duration_learning_runtime_evidence_outbox_tombstone()
-      OWNER TO service_role;
-    ALTER FUNCTION public.cancel_duration_learning_runtime_evidence_before_subject_delete()
-      OWNER TO service_role;
-  END IF;
-END
-$$;
-
 REVOKE ALL ON FUNCTION public.archive_duration_learning_runtime_evidence_outbox_tombstone() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.archive_duration_learning_runtime_evidence_outbox_tombstone()
   TO workbuddy_runtime, service_role;
@@ -1225,15 +1214,6 @@ BEGIN
 
   RETURN QUERY SELECT unnest(resolved_keys);
 END;
-$$;
-
-DO $$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
-    ALTER FUNCTION public.persist_duration_learning_runtime_consumptions(JSONB)
-      OWNER TO service_role;
-  END IF;
-END
 $$;
 
 REVOKE ALL ON FUNCTION public.persist_duration_learning_runtime_consumptions(JSONB) FROM PUBLIC;

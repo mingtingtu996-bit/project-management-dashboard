@@ -169,6 +169,16 @@ describe('duration learning runtime evidence outbox migration', () => {
     expect(rollback).toContain('GRANT SELECT, INSERT ON TABLE public.duration_learning_runtime_consumptions')
   })
 
+  it('keeps security-definer ownership with migration authority without expanding service-role schema privileges', () => {
+    const sql = readSql('migrations', migrationName)
+
+    expect(sql).not.toContain('OWNER TO service_role')
+    expect(sql).not.toMatch(/GRANT\s+CREATE\s+ON\s+SCHEMA\s+public\s+TO\s+service_role/i)
+    expect(sql).toContain('GRANT EXECUTE ON FUNCTION public.archive_duration_learning_runtime_evidence_outbox_tombstone()')
+    expect(sql).toContain('GRANT EXECUTE ON FUNCTION public.cancel_duration_learning_runtime_evidence_before_subject_delete()')
+    expect(sql).toContain('GRANT EXECUTE ON FUNCTION public.persist_duration_learning_runtime_consumptions(JSONB)')
+  })
+
   it('has an explicit rollback that removes the two outbox relations and restores the 315 policy', () => {
     const rollback = readSql('migrations', 'rollback', migrationName)
 
