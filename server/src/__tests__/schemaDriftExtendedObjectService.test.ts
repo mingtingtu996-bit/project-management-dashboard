@@ -45,6 +45,142 @@ const migrationSql = `
 `
 
 describe('schemaDriftExtendedObjectService', () => {
+  it('collects DDL after comments containing apostrophes', () => {
+    const catalog = buildExpectedExtendedSchemaFromMigrationSql(`
+      CREATE TABLE public.runtime_consumptions (id UUID PRIMARY KEY);
+      GRANT INSERT ON TABLE public.runtime_consumptions TO workbuddy_runtime;
+      -- Migration 315's direct table grant is intentionally removed.
+      REVOKE INSERT ON TABLE public.runtime_consumptions FROM workbuddy_runtime;
+    `)
+
+    expect(catalog.grants).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        key: 'table:public.runtime_consumptions:workbuddy_runtime:insert',
+        allowed: false,
+      }),
+    ]))
+  })
+
+  it('removes grants for relations dropped by later migrations', () => {
+    const catalog = buildExpectedExtendedSchemaFromMigrationSql(`
+      CREATE TABLE public.retired_runtime (id UUID PRIMARY KEY);
+      GRANT SELECT, INSERT, UPDATE ON TABLE public.retired_runtime TO workbuddy_runtime;
+      DROP TABLE public.retired_runtime;
+    `)
+
+    expect(catalog.grants.filter((grant) => grant.objectName === 'public.retired_runtime')).toEqual([])
+  })
+
+  it('parses views with PostgreSQL view options', () => {
+    const catalog = buildExpectedExtendedSchemaFromMigrationSql(`
+      CREATE TABLE public.execution_fact_events (id UUID PRIMARY KEY);
+      CREATE OR REPLACE VIEW public.current_execution_facts
+      WITH (security_invoker = true)
+      AS SELECT id FROM public.execution_fact_events;
+    `)
+
+    expect(catalog.views).toEqual([
+      expect.objectContaining({
+        key: 'public.current_execution_facts',
+        definition: 'SELECT id FROM public.execution_fact_events',
+      }),
+    ])
+  })
+
+  it('reads volatility from function attributes and normalizes RETURNS TABLE catalog spacing', () => {
+    const expected = buildExpectedExtendedSchemaFromMigrationSql(`
+      CREATE FUNCTION public.retirement_readback()
+      RETURNS TABLE (
+        publication_key TEXT,
+        previous_publication_key TEXT,
+        restored_publication_key TEXT
+      )
+      LANGUAGE plpgsql
+      AS $$
+      BEGIN
+        RAISE EXCEPTION 'runtime publication is immutable until stable review';
+      END;
+      $$;
+    `)
+    const actual: SchemaDriftExtendedCatalog = {
+      ...expected,
+      functions: expected.functions.map((item) => ({
+        ...item,
+        resultType: 'table(publication_key text, previous_publication_key text, restored_publication_key text)',
+        volatility: 'volatile',
+      })),
+    }
+
+    expect(expected.functions[0]).toEqual(expect.objectContaining({ volatility: 'volatile' }))
+    expect(evaluateExtendedSchemaDrift({ expected, actual })).toEqual({ status: 'pass', blockingDrift: [] })
+  })
+
+  it('reads function attributes that follow the body without inspecting body text', () => {
+    const expected = buildExpectedExtendedSchemaFromMigrationSql(`
+      CREATE FUNCTION public.post_body_function()
+      RETURNS trigger
+      AS $$ BEGIN
+        RAISE EXCEPTION 'body says IMMUTABLE but is not an attribute';
+        RETURN NEW;
+      END; $$
+      LANGUAGE plpgsql STABLE SECURITY DEFINER;
+    `)
+
+    expect(expected.functions[0]).toEqual(expect.objectContaining({
+      language: 'plpgsql',
+      volatility: 'stable',
+      securityDefiner: true,
+    }))
+  })
+
+  it('treats view security options as blocking schema drift', () => {
+    const expected = buildExpectedExtendedSchemaFromMigrationSql(`
+      CREATE OR REPLACE VIEW public.current_execution_facts
+      WITH (security_invoker = true, security_barrier = true)
+      AS SELECT 1 AS id;
+    `)
+    const actual = structuredClone(expected) as SchemaDriftExtendedCatalog
+    actual.views = actual.views.map((item) => ({
+      ...item,
+      options: [],
+    } as unknown as typeof item))
+
+    expect((expected.views[0] as unknown as { options?: string[] }).options).toEqual([
+      'security_barrier = true',
+      'security_invoker = true',
+    ])
+    expect(evaluateExtendedSchemaDrift({ expected, actual })).toEqual(expect.objectContaining({
+      status: 'fail',
+      blockingDrift: expect.arrayContaining([
+        expect.objectContaining({
+          objectType: 'view',
+          driftType: 'view_definition_mismatch',
+        }),
+      ]),
+    }))
+  })
+
+  it('normalizes catalog parentheses around trigger IS DISTINCT FROM predicates', () => {
+    const expected = buildExpectedExtendedSchemaFromMigrationSql(`
+      CREATE FUNCTION public.enqueue_task_write()
+      RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$;
+      CREATE TRIGGER enqueue_task_write_trigger
+        AFTER UPDATE ON public.tasks
+        FOR EACH ROW
+        WHEN (OLD.status IS DISTINCT FROM NEW.status OR OLD.progress IS DISTINCT FROM NEW.progress)
+        EXECUTE FUNCTION public.enqueue_task_write();
+    `)
+    const actual: SchemaDriftExtendedCatalog = {
+      ...expected,
+      triggers: expected.triggers.map((item) => ({
+        ...item,
+        condition: '(old.status is distinct from new.status) or (old.progress is distinct from new.progress)',
+      })),
+    }
+
+    expect(evaluateExtendedSchemaDrift({ expected, actual })).toEqual({ status: 'pass', blockingDrift: [] })
+  })
+
   it('builds ordered expected trigger, function, view, enum, extension and grant state', () => {
     const catalog = buildExpectedExtendedSchemaFromMigrationSql(migrationSql)
 

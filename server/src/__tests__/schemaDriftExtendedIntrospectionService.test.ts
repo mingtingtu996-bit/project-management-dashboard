@@ -43,12 +43,12 @@ describe('schemaDriftExtendedIntrospectionService', () => {
         },
       ],
       views: [
-        {
+        Object.assign({
           schema_name: 'public',
           view_name: 'task_overview',
           materialized: false,
           definition: 'SELECT tasks.id FROM public.tasks;',
-        },
+        }, { reloptions: ['security_invoker=true'] }),
       ],
       enums: [
         { schema_name: 'public', enum_name: 'task_priority', label: 'low', sort_order: 1 },
@@ -99,7 +99,11 @@ describe('schemaDriftExtendedIntrospectionService', () => {
       }),
     ])
     expect(catalog.views).toEqual([
-      expect.objectContaining({ key: 'public.task_overview', materialized: false }),
+      expect.objectContaining({
+        key: 'public.task_overview',
+        materialized: false,
+        options: ['security_invoker = true'],
+      }),
     ])
     expect(catalog.enums).toEqual([
       expect.objectContaining({ key: 'public.task_priority', labels: ['low', 'high'] }),

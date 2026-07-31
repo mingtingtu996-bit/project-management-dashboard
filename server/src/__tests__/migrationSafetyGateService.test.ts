@@ -1199,6 +1199,138 @@ describe('migrationSafetyGateService', () => {
     expect(result.status).toBe('pass')
   })
 
+  it('normalizes current PostgreSQL constraint, expression-index and policy catalog output', () => {
+    const result = evaluateSchemaDrift({
+      expectedTables: [{
+        tableName: 'duration_assets',
+        columns: [column('publication_key', 'text'), column('metadata', 'jsonb')],
+        constraints: [
+          constraint(
+            'duration_assets_resolution_state_check',
+            'check_constraint',
+            "CHECK ((status = 'open' AND decision_reason IS NULL) OR (status = 'approved' AND NULLIF(BTRIM(decision_reason), '') IS NOT NULL))",
+          ),
+          constraint(
+            'duration_assets_publication_fkey',
+            'foreign_key',
+            'FOREIGN KEY (publication_key, asset_key) REFERENCES duration_publications (publication_key, asset_key) ON DELETE CASCADE',
+          ),
+        ],
+        indexes: [
+          index(
+            'uq_duration_assets_candidate_operation',
+            "CREATE UNIQUE INDEX uq_duration_assets_candidate_operation ON public.duration_assets (company_id, project_id, (metadata ->> 'candidate_operation_id')) NULLS NOT DISTINCT WHERE is_active = TRUE AND metadata ->> 'candidate_operation_id' IS NOT NULL",
+          ),
+          index(
+            'idx_duration_assets_review_queue',
+            "CREATE INDEX idx_duration_assets_review_queue ON public.duration_assets (company_id, confidence DESC, created_at ASC) WHERE status = 'candidate'",
+          ),
+        ],
+        rls: {
+          enabled: true,
+          forced: false,
+          policies: [{
+            policyName: 'duration_assets_member_read',
+            command: 'select',
+            usingExpression: 'benchmark.company_id IS NOT DISTINCT FROM duration_assets.company_id AND benchmark.project_id IS NOT DISTINCT FROM duration_assets.project_id',
+            withCheckExpression: null,
+          }],
+        },
+      }],
+      actualTables: [{
+        tableName: 'duration_assets',
+        columns: [column('publication_key', 'text'), column('metadata', 'jsonb')],
+        constraints: [
+          constraint(
+            'duration_assets_resolution_state_check',
+            'check_constraint',
+            "CHECK ((((status = 'open'::text) AND (decision_reason IS NULL)) OR ((status = 'approved'::text) AND (NULLIF(btrim(decision_reason), ''::text) IS NOT NULL))))",
+          ),
+          constraint(
+            'duration_assets_publication_fkey',
+            'foreign_key',
+            'FOREIGN KEY (publication_key, asset_key) REFERENCES duration_publications(publication_key, asset_key) ON DELETE CASCADE',
+          ),
+        ],
+        indexes: [
+          index(
+            'uq_duration_assets_candidate_operation',
+            "CREATE UNIQUE INDEX uq_duration_assets_candidate_operation ON public.duration_assets USING btree (company_id, project_id, ((metadata ->> 'candidate_operation_id'::text))) NULLS NOT DISTINCT WHERE ((is_active = true) AND ((metadata ->> 'candidate_operation_id'::text) IS NOT NULL))",
+          ),
+          index(
+            'idx_duration_assets_review_queue',
+            "CREATE INDEX idx_duration_assets_review_queue ON public.duration_assets USING btree (company_id, confidence DESC, created_at) WHERE (status = 'candidate'::text)",
+          ),
+        ],
+        rls: {
+          enabled: true,
+          forced: false,
+          policies: [{
+            policyName: 'duration_assets_member_read',
+            command: 'select',
+            usingExpression: '(NOT (benchmark.company_id IS DISTINCT FROM duration_assets.company_id)) AND (NOT (benchmark.project_id IS DISTINCT FROM duration_assets.project_id))',
+            withCheckExpression: null,
+          }],
+        },
+      }],
+    })
+
+    expect(result).toEqual(expect.objectContaining({ status: 'pass', blockingDrift: [] }))
+  })
+
+  it('normalizes PostgreSQL JSON, role and NOT EXISTS policy rewrites', () => {
+    const result = evaluateSchemaDrift({
+      expectedTables: [{
+        tableName: 'runtime_outbox',
+        columns: [column('company_id', 'uuid'), column('scope_snapshot', 'jsonb')],
+        rls: {
+          enabled: true,
+          forced: false,
+          policies: [{
+            policyName: 'runtime_outbox_insert',
+            command: 'insert',
+            usingExpression: null,
+            withCheckExpression: `
+              current_user = 'service_role'
+              AND event_key = scope_snapshot ->> 'eventKey'
+              AND company_id::text = scope_snapshot ->> 'companyId'
+              AND jsonb_typeof(scope_snapshot) = 'object'
+              AND NOT EXISTS (
+                SELECT 1 FROM public.tasks task
+                WHERE task.id = subject_id::uuid
+              )
+            `,
+          }],
+        },
+      }],
+      actualTables: [{
+        tableName: 'runtime_outbox',
+        columns: [column('company_id', 'uuid'), column('scope_snapshot', 'jsonb')],
+        rls: {
+          enabled: true,
+          forced: false,
+          policies: [{
+            policyName: 'runtime_outbox_insert',
+            command: 'insert',
+            usingExpression: null,
+            withCheckExpression: `
+              ((CURRENT_USER = 'service_role'::name)
+              AND (event_key = (scope_snapshot ->> 'eventKey'::text))
+              AND ((company_id)::text = (scope_snapshot ->> 'companyId'::text))
+              AND (jsonb_typeof(scope_snapshot) = 'object'::text)
+              AND (NOT (EXISTS (
+                SELECT 1 FROM tasks task
+                WHERE (task.id = (subject_id)::uuid)
+              ))))
+            `,
+          }],
+        },
+      }],
+    })
+
+    expect(result).toEqual(expect.objectContaining({ status: 'pass', blockingDrift: [] }))
+  })
+
   it('keeps public and private membership functions distinct without a migration-level rewrite', () => {
     const result = evaluateSchemaDrift({
       expectedTables: [{

@@ -30,6 +30,7 @@ export type SchemaDriftView = {
   viewName: string
   materialized: boolean
   definition: string
+  options?: string[]
 }
 
 export type SchemaDriftEnum = {
@@ -199,6 +200,7 @@ export function buildExpectedExtendedSchemaFromMigrationSql(sql: string): Schema
   const grants = new Map<string, SchemaDriftGrant>()
   for (const statement of statements) {
     applyGrantStatement(statement, grants, grantTargets)
+    applyDroppedObjectGrantCleanup(statement, grants)
   }
   applyDynamicFunctionAclLoops(sql, grants, grantTargets)
 
@@ -395,12 +397,13 @@ function parseCreateFunction(statement: string): SchemaDriftFunction | null {
   const name = parseQualifiedName(statement.slice(nameStart, openParen).trim())
   const identityArguments = normalizeIdentityArguments(statement.slice(openParen + 1, closeParen))
   const remainder = statement.slice(closeParen + 1)
-  const returnsMatch = remainder.match(/\breturns\s+([\s\S]+?)(?=\s+(?:language|as|security|immutable|stable|volatile|strict|called|parallel|cost|rows|set)\b)/i)
-  const language = remainder.match(/\blanguage\s+(?:"([^"]+)"|([a-zA-Z0-9_]+))/i)
+  const attributes = extractFunctionAttributes(remainder)
+  const returnsMatch = attributes.match(/\breturns\s+([\s\S]+?)(?=\s+(?:language|security|immutable|stable|volatile|strict|called|parallel|cost|rows|set)\b|$)/i)
+  const language = attributes.match(/\blanguage\s+(?:"([^"]+)"|([a-zA-Z0-9_]+))/i)
   const body = extractFunctionBody(remainder)
-  const volatility = /\bimmutable\b/i.test(remainder)
+  const volatility = /\bimmutable\b/i.test(attributes)
     ? 'immutable'
-    : /\bstable\b/i.test(remainder)
+    : /\bstable\b/i.test(attributes)
       ? 'stable'
       : 'volatile'
   const key = `${name.schemaName}.${name.objectName}(${identityArguments})`
@@ -412,7 +415,7 @@ function parseCreateFunction(statement: string): SchemaDriftFunction | null {
     identityArguments,
     resultType: normalizePostgresType(returnsMatch?.[1] ?? ''),
     language: normalizeIdentifier(language?.[1] ?? language?.[2] ?? ''),
-    securityDefiner: /\bsecurity\s+definer\b/i.test(remainder),
+    securityDefiner: /\bsecurity\s+definer\b/i.test(attributes),
     volatility,
     body: normalizeFunctionBody(body),
   }
@@ -442,6 +445,36 @@ function extractFunctionBody(remainder: string) {
 
   const quotedMatch = remainder.match(/\bas\s+'((?:''|[^'])*)'/i)
   return quotedMatch?.[1]?.replace(/''/g, "'") ?? ''
+}
+
+function extractFunctionAttributes(remainder: string) {
+  const dollarBody = remainder.match(/\bas\s+(\$[a-zA-Z0-9_]*\$)/i)
+  if (dollarBody?.[1] && dollarBody.index !== undefined) {
+    const bodyStart = dollarBody.index + dollarBody[0].length
+    const bodyEnd = remainder.indexOf(dollarBody[1], bodyStart)
+    if (bodyEnd !== -1) {
+      return `${remainder.slice(0, dollarBody.index)} ${remainder.slice(bodyEnd + dollarBody[1].length)}`
+    }
+  }
+
+  const quotedBody = remainder.match(/\bas\s+'/i)
+  if (quotedBody?.index !== undefined) {
+    const bodyStart = quotedBody.index + quotedBody[0].length
+    let bodyEnd = bodyStart
+    while (bodyEnd < remainder.length) {
+      if (remainder[bodyEnd] !== "'") {
+        bodyEnd += 1
+        continue
+      }
+      if (remainder[bodyEnd + 1] === "'") {
+        bodyEnd += 2
+        continue
+      }
+      return `${remainder.slice(0, quotedBody.index)} ${remainder.slice(bodyEnd + 1)}`
+    }
+  }
+
+  return remainder
 }
 
 function applyTriggerStatement(statement: string, triggers: Map<string, SchemaDriftTrigger>) {
@@ -500,7 +533,7 @@ function applyViewStatement(statement: string, views: Map<string, SchemaDriftVie
     return
   }
 
-  const create = normalized.match(/^create\s+(?<replace>or\s+replace\s+)?(?<materialized>materialized\s+)?view\s+(?<ifNotExists>if\s+not\s+exists\s+)?(?<name>[^\s(]+)(?:\s*\([^)]*\))?\s+as\s+(?<definition>[\s\S]+?)\s*;?$/i)
+  const create = normalized.match(/^create\s+(?<replace>or\s+replace\s+)?(?<materialized>materialized\s+)?view\s+(?<ifNotExists>if\s+not\s+exists\s+)?(?<name>[^\s(]+)(?:\s*\([^)]*\))?(?:\s+with\s*\((?<options>[^)]*)\))?\s+as\s+(?<definition>[\s\S]+?)\s*;?$/i)
   if (!create?.groups) return
   const name = parseQualifiedName(create.groups.name)
   const key = `${name.schemaName}.${name.objectName}`
@@ -512,6 +545,7 @@ function applyViewStatement(statement: string, views: Map<string, SchemaDriftVie
     viewName: name.objectName,
     materialized: Boolean(create.groups.materialized),
     definition: definition.trim(),
+    options: normalizeViewOptions(create.groups.options),
   })
 }
 
@@ -786,6 +820,27 @@ function setGrant(
   grants.set(key, { key, ...input })
 }
 
+function applyDroppedObjectGrantCleanup(statement: string, grants: Map<string, SchemaDriftGrant>) {
+  const normalized = trimLeadingControlFlow(statement)
+  const drop = normalized.match(/^drop\s+(?<kind>table|sequence|function|materialized\s+view|view)\s+(?:if\s+exists\s+)?(?<objects>[\s\S]+?)(?:\s+(?:cascade|restrict))?\s*;?$/i)
+  if (!drop?.groups?.kind || !drop.groups.objects) return
+
+  const objectType = /view|table/i.test(drop.groups.kind)
+    ? 'table'
+    : /^sequence$/i.test(drop.groups.kind)
+      ? 'sequence'
+      : 'function'
+  const objectNames = new Set(splitTopLevelComma(drop.groups.objects).map((item) => {
+    if (objectType === 'function') return parseFunctionSignature(item.trim())?.key ?? ''
+    const name = parseQualifiedName(item.trim())
+    return `${name.schemaName}.${name.objectName}`
+  }).filter(Boolean))
+
+  for (const [key, grant] of grants) {
+    if (grant.objectType === objectType && objectNames.has(grant.objectName)) grants.delete(key)
+  }
+}
+
 function expandPrivileges(value: string, objectType: SchemaDriftGrantObjectType) {
   const normalized = value.replace(/\bgrant\s+option\s+for\b/gi, '').trim().toLowerCase()
   if (!/^all(?:\s+privileges)?$/i.test(normalized)) {
@@ -827,7 +882,15 @@ function normalizeViewForComparison(item: SchemaDriftView) {
   return {
     materialized: item.materialized,
     definition: normalizeViewDefinition(item.definition),
+    options: normalizeViewOptions((item.options ?? []).join(', ')),
   }
+}
+
+export function normalizeViewOptions(value: string | null | undefined) {
+  return splitTopLevelComma(value ?? '')
+    .map((option) => normalizeWhitespace(option).replace(/\s*=\s*/g, ' = ').toLowerCase())
+    .filter(Boolean)
+    .sort()
 }
 
 function normalizeIdentityArguments(value: string) {
@@ -865,7 +928,9 @@ function normalizePostgresType(value: string) {
   const normalized = normalizeWhitespace(value)
     .replace(/\bpublic\./gi, '')
     .replace(/"([a-zA-Z0-9_]+)"/g, '$1')
-    .replace(/\btable\s+\(/gi, 'table(')
+    .replace(/\btable\s*\(\s*/gi, 'table(')
+    .replace(/\s*,\s*/g, ', ')
+    .replace(/\s+\)/g, ')')
     .toLowerCase()
   const withoutLength = normalized.replace(/\(\s*\d+(?:\s*,\s*\d+)?\s*\)/g, '')
   const aliases: Record<string, string> = {
@@ -905,8 +970,16 @@ function normalizeTriggerCondition(value: string) {
   let normalized = normalizeSqlDefinition(value)
     .replace(/::(?:text|character varying|varchar|uuid|integer|bigint|numeric|double precision|real|boolean|bool|date|timestamp with time zone|timestamp without time zone)(?:\[\])?/g, '')
     .replace(/\((new|old)\.([a-z_][a-z0-9_]*)\)/g, '$1.$2')
-  normalized = stripBalancedOuterParentheses(normalized)
-  normalized = normalized.replace(/\((new|old)\.([a-z_][a-z0-9_]*)\)/g, '$1.$2')
+  let previous = ''
+  while (previous !== normalized) {
+    previous = normalized
+    normalized = stripBalancedOuterParentheses(normalized)
+      .replace(/\((new|old)\.([a-z_][a-z0-9_]*)\)/g, '$1.$2')
+      .replace(
+        /\(\s*((?:new|old)\.[a-z_][a-z0-9_]*)\s+(is\s+(?:not\s+)?distinct\s+from)\s+((?:new|old)\.[a-z_][a-z0-9_]*)\s*\)/g,
+        '$1 $2 $3',
+      )
+  }
   return normalizeWhitespace(normalized)
 }
 
@@ -1210,9 +1283,22 @@ function isOutsideQuotes(value: string, targetIndex: number) {
   let singleQuoted = false
   let doubleQuoted = false
   let dollarTag: string | null = null
+  let lineComment = false
+  let blockComment = false
   for (let index = 0; index < targetIndex; index += 1) {
     const character = value[index]
     const next = value[index + 1]
+    if (lineComment) {
+      if (character === '\n') lineComment = false
+      continue
+    }
+    if (blockComment) {
+      if (character === '*' && next === '/') {
+        blockComment = false
+        index += 1
+      }
+      continue
+    }
     if (dollarTag) {
       if (value.startsWith(dollarTag, index)) {
         index += dollarTag.length - 1
@@ -1230,7 +1316,13 @@ function isOutsideQuotes(value: string, targetIndex: number) {
       else if (character === '"') doubleQuoted = false
       continue
     }
-    if (character === "'") singleQuoted = true
+    if (character === '-' && next === '-') {
+      lineComment = true
+      index += 1
+    } else if (character === '/' && next === '*') {
+      blockComment = true
+      index += 1
+    } else if (character === "'") singleQuoted = true
     else if (character === '"') doubleQuoted = true
     else if (character === '$') {
       const tag = value.slice(index).match(/^\$[a-zA-Z0-9_]*\$/)?.[0]
@@ -1240,7 +1332,7 @@ function isOutsideQuotes(value: string, targetIndex: number) {
       }
     }
   }
-  return !singleQuoted && !doubleQuoted && !dollarTag
+  return !singleQuoted && !doubleQuoted && !dollarTag && !lineComment && !blockComment
 }
 
 function splitTopLevelComma(value: string) {
