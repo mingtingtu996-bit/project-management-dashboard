@@ -93,6 +93,35 @@ describe('schemaDriftExpectedSchemaParser', () => {
     ]))
   })
 
+  it('renames an index object without rewriting a same-named local column', () => {
+    const expectedTables = buildExpectedSchemaFromMigrationSql(`
+      CREATE TABLE public.child (id UUID);
+      CREATE INDEX id ON public.child (id);
+      ALTER INDEX public.id RENAME TO child_id_index;
+    `)
+
+    expect(expectedTables.find((table) => table.tableName === 'child')?.indexes).toEqual([
+      expect.objectContaining({
+        indexName: 'child_id_index',
+        definition: 'CREATE INDEX child_id_index ON public.child (id)',
+      }),
+    ])
+  })
+
+  it('renames index column references without rewriting a collation identifier', () => {
+    const expectedTables = buildExpectedSchemaFromMigrationSql(`
+      CREATE TABLE public.child (id TEXT);
+      CREATE INDEX child_id_idx ON public.child (id COLLATE "id");
+      ALTER TABLE public.child RENAME COLUMN id TO child_id;
+    `)
+
+    expect(expectedTables.find((table) => table.tableName === 'child')?.indexes).toEqual([
+      expect.objectContaining({
+        definition: 'CREATE INDEX child_id_idx ON public.child (child_id COLLATE "id")',
+      }),
+    ])
+  })
+
   it('removes a dynamically discovered foreign key before applying its replacement', () => {
     const expectedTables = buildExpectedSchemaFromMigrationSql(`
       CREATE TABLE public.schedule_acceleration_recommendations (

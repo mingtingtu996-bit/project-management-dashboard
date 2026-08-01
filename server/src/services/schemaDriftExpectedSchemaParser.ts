@@ -522,7 +522,7 @@ function applyLaterColumnRenamesToIndex(sql: string, start: number, tableName: s
       const fromColumnName = normalizeObjectName(rename?.groups?.from)
       const toColumnName = normalizeObjectName(rename?.groups?.to)
       if (!fromColumnName || !toColumnName) continue
-      body = replaceSqlIdentifierOutsideSingleQuotes(body, fromColumnName, toColumnName)
+      body = replaceLocalIndexIdentifier(body, fromColumnName, toColumnName)
     }
   }
 
@@ -542,11 +542,18 @@ function applyAlterIndexStatements(sql: string, tables: Map<string, MutableExpec
       const index = table.indexes.find((candidate) => candidate.indexName === fromIndexName)
       if (!index) continue
       index.indexName = toIndexName
-      index.definition = replaceSqlIdentifierOutsideSingleQuotes(index.definition, fromIndexName, toIndexName)
+      index.definition = renameIndexObjectInDefinition(index.definition, toIndexName)
       table.indexes = table.indexes.sort((left, right) => left.indexName.localeCompare(right.indexName))
       break
     }
   }
+}
+
+function renameIndexObjectInDefinition(definition: string, indexName: string) {
+  return definition.replace(
+    /^(CREATE\s+(?:UNIQUE\s+)?INDEX\s+)(?:"[^"]+"|[a-zA-Z0-9_]+)/i,
+    `$1${indexName}`,
+  )
 }
 
 function applyDynamicallyDiscoveredForeignKeyDrops(sql: string, tables: Map<string, MutableExpectedTable>) {
@@ -1252,6 +1259,26 @@ function replaceSqlIdentifierOutsideSingleQuotes(value: string, from: string, to
   return value.replace(/'(?:''|[^'])*'|([^']+)/gs, (segment, outsideQuotes: string | undefined) => (
     outsideQuotes === undefined ? segment : outsideQuotes.replace(identifierPattern, to)
   ))
+}
+
+function replaceLocalIndexIdentifier(value: string, from: string, to: string) {
+  const tokenPattern = /'(?:''|[^'])*'|"(?:""|[^"])*"|[a-zA-Z_][a-zA-Z0-9_$]*|./gs
+  const normalizedFrom = from.toLowerCase()
+
+  return value.replace(tokenPattern, (token, offset: number) => {
+    const identifier = token.startsWith('"')
+      ? token.slice(1, -1).replace(/""/g, '"')
+      : token
+    if (identifier.toLowerCase() !== normalizedFrom || token.startsWith("'") || token === '') return token
+
+    const before = value.slice(0, offset).replace(/\s+$/g, '')
+    const after = value.slice(offset + token.length).replace(/^\s+/g, '')
+    if (before.endsWith('.') || before.endsWith('::') || /\bcollate$/i.test(before) || after.startsWith('.') || after.startsWith('(')) {
+      return token
+    }
+
+    return to
+  })
 }
 
 function findMatchingParenthesis(value: string, openIndex: number) {
