@@ -160,6 +160,85 @@ describe('schemaDriftExtendedObjectService', () => {
     }))
   })
 
+  it('replays dynamically executed ALTER VIEW security options in migration order', () => {
+    const expected = buildExpectedExtendedSchemaFromMigrationSql(`
+      CREATE VIEW public.algorithm_asset_registry_view AS SELECT 1 AS id;
+      DO $$
+      BEGIN
+        IF to_regclass('public.algorithm_asset_registry_view') IS NOT NULL THEN
+          EXECUTE 'ALTER VIEW public.algorithm_asset_registry_view SET (security_invoker = true, security_barrier = true)';
+        END IF;
+      END
+      $$;
+    `)
+
+    expect(expected.views).toEqual([
+      expect.objectContaining({
+        key: 'public.algorithm_asset_registry_view',
+        options: ['security_barrier = true', 'security_invoker = true'],
+      }),
+    ])
+  })
+
+  it('normalizes PostgreSQL no-op casts on view string literals', () => {
+    const expected = buildExpectedExtendedSchemaFromMigrationSql(`
+      CREATE VIEW public.retirement_readback
+      WITH (security_invoker = true) AS
+      SELECT
+        to_regclass('runtime_publications') IS NOT NULL AS publications_present,
+        CASE
+          WHEN retirement_status = 'retired_readback_complete' THEN 'retired_readback_complete'
+          ELSE 'blocked'
+        END AS preflight_signal
+      FROM public.retirement_state state;
+    `)
+    const actual: SchemaDriftExtendedCatalog = {
+      ...expected,
+      views: expected.views.map((view) => ({
+        ...view,
+        definition: `
+          SELECT
+            to_regclass('runtime_publications'::text) IS NOT NULL AS publications_present,
+            CASE
+              WHEN retirement_status = 'retired_readback_complete'::text THEN 'retired_readback_complete'::text
+              ELSE 'blocked'::text
+            END AS preflight_signal
+          FROM retirement_state state
+        `,
+      })),
+    }
+
+    expect(evaluateExtendedSchemaDrift({ expected, actual })).toEqual({ status: 'pass', blockingDrift: [] })
+  })
+
+  it('preserves meaningful column casts while replaying view option resets', () => {
+    const expected = buildExpectedExtendedSchemaFromMigrationSql(`
+      CREATE VIEW public.typed_view
+      WITH (security_invoker = true, security_barrier = true)
+      AS SELECT value::integer AS value FROM public.source_values;
+      ALTER VIEW public.typed_view RESET (security_barrier);
+      ALTER VIEW public.typed_view SET (security_invoker = false);
+    `)
+    const actual: SchemaDriftExtendedCatalog = {
+      ...expected,
+      views: expected.views.map((view) => ({
+        ...view,
+        definition: 'SELECT value::text AS value FROM source_values',
+      })),
+    }
+
+    expect(expected.views[0]?.options).toEqual(['security_invoker = false'])
+    expect(evaluateExtendedSchemaDrift({ expected, actual })).toEqual(expect.objectContaining({
+      status: 'fail',
+      blockingDrift: expect.arrayContaining([
+        expect.objectContaining({
+          objectName: 'public.typed_view',
+          driftType: 'view_definition_mismatch',
+        }),
+      ]),
+    }))
+  })
+
   it('normalizes catalog parentheses around trigger IS DISTINCT FROM predicates', () => {
     const expected = buildExpectedExtendedSchemaFromMigrationSql(`
       CREATE FUNCTION public.enqueue_task_write()

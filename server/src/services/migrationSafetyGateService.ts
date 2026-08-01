@@ -888,6 +888,8 @@ function normalizeSqlExpression(value: string | null | undefined, options: { nor
     .replace(/~~/g, 'like')
     .replace(/\(([-+]?\d+(?:\.\d+)?)\)/g, '$1')
 
+  expression = normalizeCatalogExpressionAtoms(expression)
+
   expression = expression.replace(
     /\bnot\s*\(\s*([a-zA-Z0-9_".]+)\s+is\s+distinct\s+from\s+([a-zA-Z0-9_".]+)\s*\)/g,
     '$1 is not distinct from $2',
@@ -901,7 +903,7 @@ function normalizeSqlExpression(value: string | null | undefined, options: { nor
     previousExpression = expression
     expression = stripWrappingParentheses(expression)
       .replace(/\bcoalesce\(\s*\(\s*([a-zA-Z0-9_".]+)\s*\)\s*,/g, 'coalesce($1,')
-      .replace(/\(\s*([a-zA-Z0-9_".]+)\s*\)\s*(=|<>|!=|>=|<=|>|<|is\s+distinct\s+from|is\s+not\s+distinct\s+from)\s*/g, '$1 $2 ')
+      .replace(/(?<![a-zA-Z0-9_])\(\s*([a-zA-Z0-9_".]+)\s*\)\s*(=|<>|!=|>=|<=|>|<|is\s+distinct\s+from|is\s+not\s+distinct\s+from)\s*/g, '$1 $2 ')
       .replace(/\(\s*([a-zA-Z0-9_".]+)\s*(=|<>|!=|>=|<=|>|<)\s*([a-zA-Z0-9_".]+)\s*\)/g, '$1 $2 $3')
       .replace(/\(\s*([a-zA-Z0-9_".]+)\s*(=|<>|!=|>=|<=|>|<|is\s+distinct\s+from|is\s+not\s+distinct\s+from)\s*('[^']*'|[-+]?\d+(?:\.\d+)?)\s*\)/g, '$1 $2 $3')
       .replace(/\s*(=|<>|!=|>=|<=|>|<|is\s+distinct\s+from|is\s+not\s+distinct\s+from)\s*\(\s*([a-zA-Z0-9_".]+|[a-zA-Z0-9_".]+\([^()]*\))\s*\)/g, ' $1 $2')
@@ -930,6 +932,7 @@ function normalizeSqlExpression(value: string | null | undefined, options: { nor
       .replace(/\s+and\s+/g, ' and ')
       .replace(/\s+/g, ' ')
       .trim()
+    expression = normalizeCatalogExpressionAtoms(expression)
     if (normalizeExists) {
       expression = normalizeExistsExpression(expression)
       expression = stripWrappedExistsCalls(expression)
@@ -1092,7 +1095,7 @@ function normalizeCheckDefinition(value: string) {
   expression = normalizeBetweenExpression(expression)
 
   expression = stripWrappingParentheses(expression
-    .replace(/\(\s*([a-zA-Z0-9_".]+)\s*\)\s*(=|<>|!=|>=|<=|>|<|is\s+distinct\s+from|is\s+not\s+distinct\s+from)\s*/g, '$1 $2 ')
+    .replace(/(?<![a-zA-Z0-9_])\(\s*([a-zA-Z0-9_".]+)\s*\)\s*(=|<>|!=|>=|<=|>|<|is\s+distinct\s+from|is\s+not\s+distinct\s+from)\s*/g, '$1 $2 ')
     .replace(/\s*(=|<>|!=|>=|<=|>|<|is\s+distinct\s+from|is\s+not\s+distinct\s+from)\s*\(\s*([a-zA-Z0-9_".]+|[a-zA-Z0-9_".]+\([^()]*\))\s*\)/g, ' $1 $2')
     .replace(/\(\s*([a-zA-Z0-9_".]+)\s+is\s+null\s*\)/g, '$1 is null')
     .replace(/\(\s*([a-zA-Z0-9_".]+)\s+in\s+\(([^()]+)\)\s*\)/g, '$1 in ($2)')
@@ -1100,6 +1103,7 @@ function normalizeCheckDefinition(value: string) {
     .replace(/\b([a-zA-Z0-9_".]+)\s+in\s+\(([^()]+)\)/g, '$1 in ($2)')
     .replace(/\s+or\s+/g, ' or ')
     .replace(/\s+and\s+/g, ' and '))
+  expression = normalizeCatalogExpressionAtoms(expression)
 
   expression = stripWrappingParentheses(expression)
   let previousExpression = ''
@@ -1108,7 +1112,7 @@ function normalizeCheckDefinition(value: string) {
     expression = expression
       .replace(/\(\s*lower\(\(?([a-zA-Z0-9_".]+)\)?\)\s+not\s+like\s+('[^']*')\s*\)/g, 'lower($1) not like $2')
       .replace(/\bcoalesce\(\s*\(\s*([a-zA-Z0-9_".]+)\s*\)\s*,/g, 'coalesce($1,')
-      .replace(/\(\s*([a-zA-Z0-9_".]+)\s*\)\s*(=|<>|!=|>=|<=|>|<|is\s+distinct\s+from|is\s+not\s+distinct\s+from)\s*/g, '$1 $2 ')
+      .replace(/(?<![a-zA-Z0-9_])\(\s*([a-zA-Z0-9_".]+)\s*\)\s*(=|<>|!=|>=|<=|>|<|is\s+distinct\s+from|is\s+not\s+distinct\s+from)\s*/g, '$1 $2 ')
       .replace(/\s*(=|<>|!=|>=|<=|>|<|is\s+distinct\s+from|is\s+not\s+distinct\s+from)\s*\(\s*([a-zA-Z0-9_".]+|[a-zA-Z0-9_".]+\([^()]*\))\s*\)/g, ' $1 $2')
       .replace(/\(\s*([a-zA-Z0-9_".]+\([^()]*\))\s*\)/g, '$1')
       .replace(/lower\(\(?([a-zA-Z0-9_".]+)\)?\)/g, 'lower($1)')
@@ -1129,6 +1133,7 @@ function normalizeCheckDefinition(value: string) {
       .replace(/lower\(\(([^()]+)\)\)/g, 'lower($1)')
       .replace(/\s+or\s+/g, ' or ')
       .replace(/\s+and\s+/g, ' and ')
+    expression = stripRedundantBooleanOperandParentheses(normalizeCatalogExpressionAtoms(expression))
     expression = normalizeBetweenExpression(expression)
     expression = stripWrappingParentheses(expression)
   }
@@ -1142,6 +1147,7 @@ function flattenBooleanExpressionParentheses(value: string) {
   while (previousExpression !== expression) {
     previousExpression = expression
     expression = stripWrappingParentheses(expression)
+      .replace(/\(\s*not\s+([a-zA-Z0-9_".]+)\s*\)/g, 'not $1')
       .replace(
         /\(\s*([a-zA-Z0-9_".]+)\s*(=|<>|!=|>=|<=|>|<|is\s+distinct\s+from|is\s+not\s+distinct\s+from|not\s+like|like)\s*('[^']*'|[-+]?\d+(?:\.\d+)?|[a-zA-Z0-9_.()]+)\s*\)/g,
         '$1 $2 $3',
@@ -1166,8 +1172,106 @@ function flattenBooleanExpressionParentheses(value: string) {
       .replace(/\s+and\s+/g, ' and ')
       .replace(/\s+or\s+/g, ' or ')
       .trim()
+    expression = stripRedundantBooleanOperandParentheses(normalizeCatalogExpressionAtoms(expression))
   }
   return expression
+}
+
+function normalizeCatalogExpressionAtoms(value: string) {
+  return value
+    .replace(
+      /\(\s*([a-zA-Z0-9_".]+\s*(?:->>|->)\s*'(?:''|[^'])*')\s*\)/g,
+      '$1',
+    )
+    .replace(
+      /(\?\s*)\(\s*([a-zA-Z0-9_".]+)\s*\)/g,
+      '$1$2',
+    )
+}
+
+function stripRedundantBooleanOperandParentheses(value: string) {
+  let expression = value
+  let changed = true
+  while (changed) {
+    changed = false
+    for (let openIndex = expression.length - 1; openIndex >= 0; openIndex -= 1) {
+      if (expression[openIndex] !== '(') continue
+      const closeIndex = findMatchingExpressionParen(expression, openIndex)
+      if (closeIndex === -1) continue
+      const inner = expression.slice(openIndex + 1, closeIndex).trim()
+      if (!inner || hasTopLevelBooleanOperator(inner)) continue
+
+      const before = expression.slice(0, openIndex).trimEnd()
+      const after = expression.slice(closeIndex + 1).trimStart()
+      const leftIsBooleanBoundary = before.length === 0
+        || before.endsWith('(')
+        || /\b(?:and|or|not)$/i.test(before)
+      const rightIsBooleanBoundary = after.length === 0
+        || after.startsWith(')')
+        || /^(?:and|or)\b/i.test(after)
+      if (!leftIsBooleanBoundary || !rightIsBooleanBoundary) continue
+
+      expression = `${expression.slice(0, openIndex)}${inner}${expression.slice(closeIndex + 1)}`
+      changed = true
+      break
+    }
+  }
+  return expression
+}
+
+function findMatchingExpressionParen(value: string, openParenIndex: number) {
+  let depth = 0
+  let singleQuoted = false
+  for (let index = openParenIndex; index < value.length; index += 1) {
+    const character = value[index]
+    const next = value[index + 1]
+    if (singleQuoted) {
+      if (character === "'" && next === "'") index += 1
+      else if (character === "'") singleQuoted = false
+      continue
+    }
+    if (character === "'") {
+      singleQuoted = true
+      continue
+    }
+    if (character === '(') depth += 1
+    else if (character === ')') {
+      depth -= 1
+      if (depth === 0) return index
+    }
+  }
+  return -1
+}
+
+function hasTopLevelBooleanOperator(value: string) {
+  let depth = 0
+  let singleQuoted = false
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index]
+    const next = value[index + 1]
+    if (singleQuoted) {
+      if (character === "'" && next === "'") index += 1
+      else if (character === "'") singleQuoted = false
+      continue
+    }
+    if (character === "'") {
+      singleQuoted = true
+      continue
+    }
+    if (character === '(') {
+      depth += 1
+      continue
+    }
+    if (character === ')') {
+      depth -= 1
+      continue
+    }
+    if (depth !== 0) continue
+    const tail = value.slice(index)
+    const operator = tail.match(/^(?:and|or)\b/i)
+    if (operator && (index === 0 || /\s/.test(value[index - 1] ?? ''))) return true
+  }
+  return false
 }
 
 function normalizeBetweenExpression(value: string) {

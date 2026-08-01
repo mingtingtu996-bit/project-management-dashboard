@@ -533,6 +533,28 @@ function applyViewStatement(statement: string, views: Map<string, SchemaDriftVie
     return
   }
 
+  const alter = normalized.match(/^alter\s+(?<materialized>materialized\s+)?view\s+(?:if\s+exists\s+)?(?<name>[^\s]+)\s+(?<operation>set|reset)\s*(?<body>\([\s\S]*\)|all)\s*;?$/i)
+  if (alter?.groups?.name && alter.groups.operation && alter.groups.body) {
+    const name = parseQualifiedName(alter.groups.name)
+    const current = views.get(`${name.schemaName}.${name.objectName}`)
+    if (!current) return
+
+    const operation = alter.groups.operation.toLowerCase()
+    if (operation === 'reset' && /^all$/i.test(alter.groups.body.trim())) {
+      current.options = []
+      return
+    }
+
+    const body = alter.groups.body.trim().replace(/^\(|\)$/g, '')
+    const changedOptions = normalizeViewOptions(body)
+    const changedNames = new Set(changedOptions.map(viewOptionName))
+    const retainedOptions = (current.options ?? []).filter((option) => !changedNames.has(viewOptionName(option)))
+    current.options = operation === 'set'
+      ? [...retainedOptions, ...changedOptions].sort()
+      : retainedOptions.sort()
+    return
+  }
+
   const create = normalized.match(/^create\s+(?<replace>or\s+replace\s+)?(?<materialized>materialized\s+)?view\s+(?<ifNotExists>if\s+not\s+exists\s+)?(?<name>[^\s(]+)(?:\s*\([^)]*\))?(?:\s+with\s*\((?<options>[^)]*)\))?\s+as\s+(?<definition>[\s\S]+?)\s*;?$/i)
   if (!create?.groups) return
   const name = parseQualifiedName(create.groups.name)
@@ -984,7 +1006,10 @@ function normalizeTriggerCondition(value: string) {
 }
 
 function normalizeViewDefinition(value: string) {
-  const normalized = normalizeSqlDefinition(value)
+  const normalized = normalizeSqlDefinition(value).replace(
+    /('(?:''|[^'])*')\s*::\s*(?:text|character varying|varchar)\b/g,
+    '$1',
+  )
   return normalized
     .split(/\bunion\s+all\b/)
     .map((branch) => normalizeSingleSourceViewBranch(branch.trim()))
@@ -1271,12 +1296,16 @@ function splitSqlStatements(value: string) {
 }
 
 function findDdlStartOutsideQuotes(value: string) {
-  const pattern = /\b(?:create\s+(?:(?:or\s+replace|constraint|materialized)\s+)*(?:table|function|trigger|view|type|extension|sequence)|drop\s+(?:table|function|trigger|materialized\s+view|view|type|extension|sequence)|alter\s+(?:type|extension|default\s+privileges)|grant|revoke)\b/gi
+  const pattern = /\b(?:create\s+(?:(?:or\s+replace|constraint|materialized)\s+)*(?:table|function|trigger|view|type|extension|sequence)|drop\s+(?:table|function|trigger|materialized\s+view|view|type|extension|sequence)|alter\s+(?:type|extension|view|materialized\s+view|default\s+privileges)|grant|revoke)\b/gi
   let match: RegExpExecArray | null
   while ((match = pattern.exec(value)) !== null) {
     if (isOutsideQuotes(value, match.index)) return match.index
   }
   return -1
+}
+
+function viewOptionName(value: string) {
+  return value.split('=', 1)[0]?.trim() ?? ''
 }
 
 function isOutsideQuotes(value: string, targetIndex: number) {

@@ -1371,6 +1371,231 @@ describe('migrationSafetyGateService', () => {
       }),
     ])
   })
+
+  it('normalizes catalog rewrites for runtime publication lineage policies', () => {
+    const expectedPredicate = `
+      (current_user = 'workbuddy_runtime' OR pg_has_role(current_user, 'workbuddy_runtime', 'member'))
+      AND jsonb_typeof(runtime_consumptions.source_evidence_refs) = 'array'
+      AND runtime_consumptions.consumption_context ->> 'authoritySource' = 'runtime_resolver_publication_set'
+      AND EXISTS (
+        SELECT 1
+        FROM public.runtime_publications publication
+        WHERE publication.publication_key = runtime_consumptions.publication_key
+          AND publication.monitoring_status IN ('pending', 'collecting', 'passed')
+          AND (
+            publication.scope_level = 'global'
+            OR publication.industry_key = NULLIF(runtime_consumptions.consumption_context ->> 'industryKey', '')
+          )
+      )
+    `
+    const actualPredicate = `
+      (((CURRENT_USER = 'workbuddy_runtime'::name)
+      OR pg_has_role(CURRENT_USER, 'workbuddy_runtime'::name, 'member'::text))
+      AND (jsonb_typeof(source_evidence_refs) = 'array'::text)
+      AND ((consumption_context ->> 'authoritySource'::text) = 'runtime_resolver_publication_set'::text)
+      AND (EXISTS (
+        SELECT 1
+        FROM runtime_publications publication
+        WHERE ((publication.publication_key = runtime_consumptions.publication_key)
+          AND (publication.monitoring_status = ANY (ARRAY['pending'::text, 'collecting'::text, 'passed'::text]))
+          AND ((publication.scope_level = 'global'::text)
+            OR (publication.industry_key = NULLIF((runtime_consumptions.consumption_context ->> 'industryKey'::text), ''::text))))
+      )))
+    `
+    const result = evaluateSchemaDrift({
+      expectedTables: [{
+        tableName: 'runtime_consumptions',
+        columns: [column('publication_key', 'text')],
+        rls: {
+          enabled: true,
+          forced: true,
+          policies: [{
+            policyName: 'runtime_consumptions_insert',
+            command: 'insert',
+            usingExpression: null,
+            withCheckExpression: expectedPredicate,
+          }],
+        },
+      }],
+      actualTables: [{
+        tableName: 'runtime_consumptions',
+        columns: [column('publication_key', 'text')],
+        rls: {
+          enabled: true,
+          forced: true,
+          policies: [{
+            policyName: 'runtime_consumptions_insert',
+            command: 'insert',
+            usingExpression: null,
+            withCheckExpression: actualPredicate,
+          }],
+        },
+      }],
+    })
+
+    expect(result).toEqual(expect.objectContaining({ status: 'pass', blockingDrift: [] }))
+
+    const changedResult = evaluateSchemaDrift({
+      expectedTables: [{
+        tableName: 'runtime_consumptions',
+        columns: [column('publication_key', 'text')],
+        rls: {
+          enabled: true,
+          forced: true,
+          policies: [{
+            policyName: 'runtime_consumptions_insert',
+            command: 'insert',
+            usingExpression: null,
+            withCheckExpression: expectedPredicate,
+          }],
+        },
+      }],
+      actualTables: [{
+        tableName: 'runtime_consumptions',
+        columns: [column('publication_key', 'text')],
+        rls: {
+          enabled: true,
+          forced: true,
+          policies: [{
+            policyName: 'runtime_consumptions_insert',
+            command: 'insert',
+            usingExpression: null,
+            withCheckExpression: actualPredicate.replace("'passed'::text", "'failed'::text"),
+          }],
+        },
+      }],
+    })
+    expect(changedResult).toEqual(expect.objectContaining({
+      status: 'fail',
+      blockingDrift: expect.arrayContaining([
+        expect.objectContaining({ driftType: 'policy_with_check_mismatch' }),
+      ]),
+    }))
+  })
+
+  it('normalizes catalog rewrites for JSONB CASE check constraints', () => {
+    const expectedDefinition = `CHECK (
+      input_subject_ids ? subject_id::text
+      AND COALESCE(jsonb_array_length(
+        CASE
+          WHEN jsonb_typeof(payload -> 'authoritativeRuntimeLineages') = 'array'
+          THEN payload -> 'authoritativeRuntimeLineages'
+          ELSE '[]'::jsonb
+        END
+      ), 0) = 0
+    )`
+    const actualDefinition = `CHECK (((input_subject_ids ? (subject_id)::text)
+      AND (COALESCE(jsonb_array_length(
+        CASE
+          WHEN (jsonb_typeof((payload -> 'authoritativeRuntimeLineages'::text)) = 'array'::text)
+          THEN (payload -> 'authoritativeRuntimeLineages'::text)
+          ELSE '[]'::jsonb
+        END
+      ), 0) = 0)))`
+    const result = evaluateSchemaDrift({
+      expectedTables: [{
+        tableName: 'runtime_outbox',
+        columns: [column('event_key', 'text')],
+        constraints: [constraint('runtime_outbox_event_contract_check', 'check_constraint', expectedDefinition)],
+      }],
+      actualTables: [{
+        tableName: 'runtime_outbox',
+        columns: [column('event_key', 'text')],
+        constraints: [constraint('runtime_outbox_event_contract_check', 'check_constraint', actualDefinition)],
+      }],
+    })
+
+    expect(result).toEqual(expect.objectContaining({ status: 'pass', blockingDrift: [] }))
+  })
+
+  it('matches unnamed PostgreSQL check constraints by equivalent definition', () => {
+    const result = evaluateSchemaDrift({
+      expectedTables: [{
+        tableName: 'structured_cause_attributions',
+        columns: [column('status', 'text')],
+        constraints: [constraint(
+          "structured_cause_attributions_not_auto_confirmed_or_status_check",
+          'check_constraint',
+          "CHECK (NOT auto_confirmed OR (status = 'confirmed' AND responsibility_class IS NULL))",
+        )],
+      }],
+      actualTables: [{
+        tableName: 'structured_cause_attributions',
+        columns: [column('status', 'text')],
+        constraints: [constraint(
+          'structured_cause_attributions_check3',
+          'check_constraint',
+          "CHECK (((NOT auto_confirmed) OR ((status = 'confirmed'::text) AND (responsibility_class IS NULL))))",
+        )],
+      }],
+    })
+
+    expect(result).toEqual(expect.objectContaining({ status: 'pass', blockingDrift: [] }))
+  })
+
+  it('normalizes catalog rewrites for runtime update cancellation policies', () => {
+    const expectedPredicate = `
+      (current_user = 'workbuddy_runtime' OR pg_has_role(current_user, 'workbuddy_runtime', 'member'))
+      AND public.runtime_outbox_row_is_governable(
+        runtime_outbox.company_id,
+        runtime_outbox.project_id,
+        runtime_outbox.subject_type,
+        runtime_outbox.subject_id,
+        runtime_outbox.input_subject_ids
+      )
+      AND (
+        public.runtime_outbox_row_is_authorized(runtime_outbox.event_type, runtime_outbox.payload)
+        OR (
+          runtime_outbox.processing_status = 'cancelled'
+          AND runtime_outbox.cancelled_at IS NOT NULL
+          AND runtime_outbox.cancellation_scope_snapshot ->> 'eventKey' = runtime_outbox.event_key
+          AND runtime_outbox.cancellation_scope_snapshot ->> 'companyId' = runtime_outbox.company_id::text
+        )
+      )
+    `
+    const actualPredicate = `
+      (((CURRENT_USER = 'workbuddy_runtime'::name)
+      OR pg_has_role(CURRENT_USER, 'workbuddy_runtime'::name, 'member'::text))
+      AND runtime_outbox_row_is_governable(company_id, project_id, subject_type, subject_id, input_subject_ids)
+      AND (runtime_outbox_row_is_authorized(event_type, payload)
+        OR ((processing_status = 'cancelled'::text)
+          AND (cancelled_at IS NOT NULL)
+          AND ((cancellation_scope_snapshot ->> 'eventKey'::text) = event_key)
+          AND ((cancellation_scope_snapshot ->> 'companyId'::text) = (company_id)::text))))
+    `
+    const result = evaluateSchemaDrift({
+      expectedTables: [{
+        tableName: 'runtime_outbox',
+        columns: [column('event_key', 'text')],
+        rls: {
+          enabled: true,
+          forced: true,
+          policies: [{
+            policyName: 'runtime_outbox_update',
+            command: 'update',
+            usingExpression: expectedPredicate,
+            withCheckExpression: expectedPredicate,
+          }],
+        },
+      }],
+      actualTables: [{
+        tableName: 'runtime_outbox',
+        columns: [column('event_key', 'text')],
+        rls: {
+          enabled: true,
+          forced: true,
+          policies: [{
+            policyName: 'runtime_outbox_update',
+            command: 'update',
+            usingExpression: actualPredicate,
+            withCheckExpression: actualPredicate,
+          }],
+        },
+      }],
+    })
+
+    expect(result).toEqual(expect.objectContaining({ status: 'pass', blockingDrift: [] }))
+  })
 })
 
 function column(
