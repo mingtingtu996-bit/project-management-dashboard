@@ -432,6 +432,41 @@ describe('schemaDriftExtendedObjectService', () => {
     })
   })
 
+  it('normalizes correlated single-source view aliases and NOT EXISTS grouping from PostgreSQL introspection', () => {
+    const expected = buildExpectedExtendedSchemaFromMigrationSql(`
+      CREATE OR REPLACE VIEW public.current_execution_facts
+      WITH (security_invoker = true)
+      AS
+      SELECT event.id, event.project_id
+      FROM public.execution_fact_events event
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM public.execution_fact_events successor
+        WHERE successor.supersedes_event_id = event.id
+      );
+    `)
+    const actual: SchemaDriftExtendedCatalog = {
+      ...expected,
+      views: expected.views.map((view) => ({
+        ...view,
+        definition: `
+          SELECT id, project_id
+          FROM public.execution_fact_events event
+          WHERE NOT (EXISTS (
+            SELECT 1
+            FROM public.execution_fact_events successor
+            WHERE successor.supersedes_event_id = event.id
+          ));
+        `,
+      })),
+    }
+
+    expect(evaluateExtendedSchemaDrift({ expected, actual })).toEqual({
+      status: 'pass',
+      blockingDrift: [],
+    })
+  })
+
   it('normalizes RETURNS TABLE spacing from PostgreSQL introspection', () => {
     const expected = buildExpectedExtendedSchemaFromMigrationSql(`
       CREATE FUNCTION public.atomic_demo()

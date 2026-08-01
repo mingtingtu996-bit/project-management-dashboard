@@ -188,7 +188,9 @@ async function introspectActualPublicSchema(client: InstanceType<typeof Client>)
       JOIN pg_class index_class ON index_class.oid = idx.indexrelid
       JOIN pg_class table_class ON table_class.oid = idx.indrelid
       JOIN pg_namespace n ON n.oid = table_class.relnamespace
-      LEFT JOIN pg_constraint con ON con.conindid = index_class.oid
+      LEFT JOIN pg_constraint con
+        ON con.conindid = index_class.oid
+       AND con.conrelid = table_class.oid
       WHERE n.nspname = 'public'
         AND con.oid IS NULL
       ORDER BY table_class.relname ASC, index_class.relname ASC

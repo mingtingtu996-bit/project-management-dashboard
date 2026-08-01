@@ -1006,9 +1006,11 @@ function normalizeTriggerCondition(value: string) {
 }
 
 function normalizeViewDefinition(value: string) {
-  const normalized = normalizeSqlDefinition(value).replace(
-    /('(?:''|[^'])*')\s*::\s*(?:text|character varying|varchar)\b/g,
-    '$1',
+  const normalized = normalizeNotExistsGrouping(
+    normalizeSqlDefinition(value).replace(
+      /('(?:''|[^'])*')\s*::\s*(?:text|character varying|varchar)\b/g,
+      '$1',
+    ),
   )
   return normalized
     .split(/\bunion\s+all\b/)
@@ -1019,9 +1021,9 @@ function normalizeViewDefinition(value: string) {
 function normalizeSingleSourceViewBranch(branch: string) {
   if (/\bjoin\b/.test(branch)) return branch
   const sources = Array.from(branch.matchAll(/\bfrom\s+([a-z_][a-z0-9_]*)(?:\s+(?:as\s+)?([a-z_][a-z0-9_]*))?/g))
-  if (sources.length !== 1) return branch
   const sourceName = sources[0]?.[1]
   const possibleAlias = sources[0]?.[2]
+  if (!sourceName) return branch
   const reservedWords = new Set(['where', 'group', 'order', 'limit', 'offset', 'union', 'having', 'window'])
   const qualifiers = [sourceName, possibleAlias && !reservedWords.has(possibleAlias) ? possibleAlias : null]
     .filter((item): item is string => Boolean(item))
@@ -1030,6 +1032,52 @@ function normalizeSingleSourceViewBranch(branch: string) {
     result = result.replace(new RegExp(`\\b${escapeRegExp(qualifier)}\\.`, 'g'), '')
   }
   return result
+}
+
+function normalizeNotExistsGrouping(value: string) {
+  const pattern = /\bnot\s*\(\s*exists\b/g
+  let result = ''
+  let cursor = 0
+  let match: RegExpExecArray | null
+
+  while ((match = pattern.exec(value)) !== null) {
+    const openingParenthesisIndex = value.indexOf('(', match.index)
+    const existsIndex = value.indexOf('exists', openingParenthesisIndex)
+    const closingParenthesisIndex = findMatchingClosingParenthesis(value, openingParenthesisIndex)
+    if (openingParenthesisIndex < 0 || existsIndex < 0 || closingParenthesisIndex < 0) continue
+
+    result += value.slice(cursor, openingParenthesisIndex)
+    result += value.slice(existsIndex, closingParenthesisIndex)
+    cursor = closingParenthesisIndex + 1
+  }
+
+  return result ? `${result}${value.slice(cursor)}` : value
+}
+
+function findMatchingClosingParenthesis(value: string, openingParenthesisIndex: number) {
+  let depth = 0
+  let singleQuoted = false
+
+  for (let index = openingParenthesisIndex; index < value.length; index += 1) {
+    const character = value[index]
+    const next = value[index + 1]
+    if (singleQuoted) {
+      if (character === "'" && next === "'") index += 1
+      else if (character === "'") singleQuoted = false
+      continue
+    }
+    if (character === "'") {
+      singleQuoted = true
+      continue
+    }
+    if (character === '(') depth += 1
+    else if (character === ')') {
+      depth -= 1
+      if (depth === 0) return index
+    }
+  }
+
+  return -1
 }
 
 function stripBalancedOuterParentheses(value: string) {
