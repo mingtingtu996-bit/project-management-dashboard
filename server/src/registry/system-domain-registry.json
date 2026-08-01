@@ -3335,6 +3335,13 @@
     },
     {
       "kind": "migration",
+      "id": "333_staging_schema_drift_reconciliation",
+      "architectureUnit": "底座：平台运行观测",
+      "runtimeScope": "platform_foundation",
+      "assignmentReason": "generated_from_server_migration_inventory_platform_schema_change"
+    },
+    {
+      "kind": "migration",
       "id": "CLEAN_MIGRATION",
       "architectureUnit": "底座：平台运行观测",
       "runtimeScope": "platform_foundation",
