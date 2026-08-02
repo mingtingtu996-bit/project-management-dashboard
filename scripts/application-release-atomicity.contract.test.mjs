@@ -43,6 +43,42 @@ test('release archives are prepared outside the live tree and activated with a r
   assert.doesNotMatch(script, /tar -xzf "\$RELEASE_ARCHIVE" -C "\$APP_DIR"/u)
 })
 
+test('initial bootstrap treats an absent current pointer as no previous release', async () => {
+  const script = await source('scripts/deploy-lighthouse-server.sh')
+  const resolveCurrentReleaseTarget = script.match(
+    /(resolve_current_release_target\(\) \{[\s\S]*?\n\})\n\n/u,
+  )?.[1]
+  assert.ok(
+    resolveCurrentReleaseTarget,
+    'resolve_current_release_target must remain executable in isolation',
+  )
+
+  const result = runBash(`
+set -euo pipefail
+ROOT_DIR="$(mktemp -d)"
+trap 'rm -rf "$ROOT_DIR"' EXIT
+CURRENT_LINK="$ROOT_DIR/current"
+readlink() {
+  printf 'called\n' >> "$ROOT_DIR/readlink-calls"
+  [ "$MOCK_READLINK_RESULT" != fail ] || return 1
+  printf '%s' "$MOCK_READLINK_RESULT"
+}
+${resolveCurrentReleaseTarget}
+test ! -e "$CURRENT_LINK"
+test -z "$(resolve_current_release_target)"
+test ! -f "$ROOT_DIR/readlink-calls"
+touch "$CURRENT_LINK"
+test "$(resolve_current_release_target)" = "$MOCK_READLINK_RESULT"
+grep -Fqx called "$ROOT_DIR/readlink-calls"
+MOCK_READLINK_RESULT=fail
+if resolve_current_release_target; then exit 91; fi
+`, { MOCK_READLINK_RESULT: '/managed/releases/previous' })
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
+  assert.equal(script.match(/readlink -f "\$CURRENT_LINK"/gu)?.length, 1)
+  assert.equal(script.match(/resolve_current_release_target/g)?.length, 4)
+})
+
 test('stable runtime env and data paths are linked into releases and never quarantined', async () => {
   const script = await source('scripts/deploy-lighthouse-server.sh')
 
@@ -366,9 +402,13 @@ test -z "$(find "$ROOT_DIR" -maxdepth 1 -name 'pending-application-release.env.n
 
 test('rollback clears state only after the previous release is healthy on the migrated schema', async () => {
   const script = await source('scripts/deploy-lighthouse-server.sh')
+  const resolveCurrentReleaseTarget = script.match(
+    /(resolve_current_release_target\(\) \{[\s\S]*?\n\})\n\n/u,
+  )?.[1]
   const rollbackFunction = script.match(
     /(rollback_application_release\(\) \{[\s\S]*?\n\})\n\nsnapshot_legacy_release/u,
   )?.[1]
+  assert.ok(resolveCurrentReleaseTarget, 'rollback must use the shared current-target resolver')
   assert.ok(rollbackFunction, 'rollback_application_release must remain executable in isolation')
 
   const activeSha = '3'.repeat(40)
@@ -409,6 +449,7 @@ verify_release_health() {
 }
   atomic_link() { printf '%s' "$1" > "$CURRENT_LINK-target"; }
 quarantine_release_dir() { mv "$1" "$FAILED_RELEASES_DIR/$2"; }
+${resolveCurrentReleaseTarget}
 ${rollbackFunction}
 if [ "$SCHEMA_COMPATIBLE" = true ]; then
   rollback_application_release
