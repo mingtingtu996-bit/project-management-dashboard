@@ -467,6 +467,35 @@ describe('schemaDriftExtendedObjectService', () => {
     })
   })
 
+  it('normalizes PostgreSQL whitespace before closing view-expression parentheses', () => {
+    const expected = buildExpectedExtendedSchemaFromMigrationSql(`
+      CREATE OR REPLACE VIEW public.current_execution_facts
+      WITH (security_invoker = true)
+      AS
+      SELECT event.id
+      FROM public.execution_fact_events event
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM public.execution_fact_events successor
+        WHERE successor.supersedes_event_id = event.id
+      );
+    `)
+    const actual: SchemaDriftExtendedCatalog = {
+      ...expected,
+      views: expected.views.map((view) => ({
+        ...view,
+        definition: view.definition.replace(/\s+\)/g, ')'),
+      })),
+    }
+
+    expect(actual.views[0]?.definition).not.toBe(expected.views[0]?.definition)
+
+    expect(evaluateExtendedSchemaDrift({ expected, actual })).toEqual({
+      status: 'pass',
+      blockingDrift: [],
+    })
+  })
+
   it('normalizes RETURNS TABLE spacing from PostgreSQL introspection', () => {
     const expected = buildExpectedExtendedSchemaFromMigrationSql(`
       CREATE FUNCTION public.atomic_demo()
