@@ -589,10 +589,17 @@ validate_release_archive() {
   tar -tzf "$1" | awk '{ name=$0; sub(/^\.\//, "", name); if (name ~ /^\// || name ~ /(^|\/)\.\.($|\/)/ || name == "deploy/env/server.production.env") exit 1 }'
 }
 
+resolve_current_release_target() {
+  if [ ! -e "$CURRENT_LINK" ] && [ ! -L "$CURRENT_LINK" ]; then
+    return 0
+  fi
+  readlink -f "$CURRENT_LINK"
+}
+
 quarantine_release_dir() {
   local release_dir="$1" release_sha="$2" current_target
   [ -d "$release_dir" ] || return 0
-  current_target="$(readlink -f "$CURRENT_LINK" 2>/dev/null || true)"
+  current_target="$(resolve_current_release_target)" || return 1
   [ "$current_target" != "$release_dir" ] || return 1
   mkdir -p "$FAILED_RELEASES_DIR" || return 1
   mv "$release_dir" "$FAILED_RELEASES_DIR/${release_sha}-$(date -u +%Y%m%dT%H%M%SZ)-$$" || return 1
@@ -632,7 +639,7 @@ rollback_application_release() {
   previous_target="$(state_value PREVIOUS_TARGET)"
   require_sha "$activated_sha" || return 1
   [ "$activated_target" = "$RELEASES_DIR/$activated_sha" ] || return 1
-  current_target="$(readlink -f "$CURRENT_LINK" 2>/dev/null || true)"
+  current_target="$(resolve_current_release_target)" || return 1
   if [ -n "$previous_target" ]; then
     case "$previous_target" in "$RELEASES_DIR"/*) ;; *) return 1 ;; esac
     [ -d "$previous_target" ] || return 1
@@ -695,7 +702,10 @@ deployment_failure() {
 trap deployment_failure ERR INT TERM
 
 if [ -f "$STATE_FILE" ]; then rollback_application_release || exit 1; fi
-PREVIOUS_TARGET="$(readlink -f "$CURRENT_LINK" 2>/dev/null || true)"
+PREVIOUS_TARGET="$(resolve_current_release_target)" || {
+  echo "Current application pointer could not be resolved." >&2
+  exit 1
+}
 if [ -z "$PREVIOUS_TARGET" ]; then
   if [ -f "$APP_DIR/client/dist/workbuddy-build.json" ]; then
     PREVIOUS_TARGET="$(snapshot_legacy_release)" || { echo "Existing tree could not be captured as a rollback release." >&2; exit 1; }
