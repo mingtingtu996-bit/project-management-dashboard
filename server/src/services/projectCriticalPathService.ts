@@ -51,8 +51,11 @@ import {
 import { isUnconfirmedHeuristicDependency } from './dependencyAuthorityService.js'
 import {
   listCurrentExecutionFacts,
-  type ExecutionFactEvent,
 } from './executionFactGovernanceService.js'
+import {
+  applyTaskExecutionFactAuthority,
+  TASK_EXECUTION_FACT_AUTHORITY_TYPES,
+} from './taskExecutionFactAuthorityService.js'
 
 const criticalPathSnapshotCache = new Map<string, CachedCriticalPathSnapshot>()
 const criticalPathRecalculationByProject = new Map<string, Promise<ProjectCriticalPathResult>>()
@@ -2223,54 +2226,15 @@ const CRITICAL_PATH_TASK_SELECT_COLUMNS = [
   'created_at',
 ].join(', ')
 
-const CRITICAL_PATH_TASK_EXECUTION_FACT_TYPES = [
-  'task.actual_start_date',
-  'task.actual_end_date',
-  'task.first_progress_at',
-  'task.progress',
-  'task.status',
-] as const
-
-function applyCurrentTaskExecutionFacts(
-  rows: CriticalPathTaskRow[],
-  facts: ExecutionFactEvent[],
-): CriticalPathTaskRow[] {
-  const rowsById = new Map(rows.map((row) => [row.id, { ...row }]))
-  for (const fact of facts) {
-    const row = rowsById.get(fact.entityId)
-    if (!row || fact.entityType !== 'task') continue
-    switch (fact.factType) {
-      case 'task.actual_start_date':
-        row.actual_start_date = fact.value == null ? null : String(fact.value)
-        break
-      case 'task.actual_end_date':
-        row.actual_end_date = fact.value == null ? null : String(fact.value)
-        break
-      case 'task.first_progress_at':
-        row.first_progress_at = fact.value == null ? null : String(fact.value)
-        break
-      case 'task.progress':
-        row.progress = fact.value == null ? null : Number(fact.value)
-        break
-      case 'task.status':
-        row.status = fact.value == null ? null : String(fact.value)
-        break
-      default:
-        break
-    }
-  }
-  return rows.map((row) => rowsById.get(row.id) ?? row)
-}
-
 async function applyCriticalPathExecutionFactAuthority(projectId: string, rows: CriticalPathTaskRow[]) {
   if (rows.length === 0) return rows
   const facts = await listCurrentExecutionFacts({
     projectId,
     entityType: 'task',
     entityIds: rows.map((row) => row.id),
-    factTypes: [...CRITICAL_PATH_TASK_EXECUTION_FACT_TYPES],
+    factTypes: [...TASK_EXECUTION_FACT_AUTHORITY_TYPES],
   })
-  return applyCurrentTaskExecutionFacts(rows, facts)
+  return applyTaskExecutionFactAuthority(rows, facts)
 }
 
 async function loadCriticalPathTaskRows(projectId: string): Promise<CriticalPathTaskRow[]> {

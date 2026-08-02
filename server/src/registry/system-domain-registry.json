@@ -6934,6 +6934,13 @@
     },
     {
       "kind": "service",
+      "id": "taskExecutionFactAuthorityService",
+      "architectureUnit": "底座：平台运行观测",
+      "runtimeScope": "platform_foundation",
+      "assignmentReason": "projects the current task execution-fact tuple as an atomic read authority for forecast, CPM, and duration-learning consumers without writing business facts"
+    },
+    {
+      "kind": "service",
       "id": "taskLagStatusService",
       "architectureUnit": "主执行环：计划编制",
       "runtimeScope": "business_core",
@@ -7002,6 +7009,14 @@
       "architectureUnit": "主执行环：计划编制",
       "runtimeScope": "business_core",
       "assignmentReason": "generated_by_v14232a_heuristic_requires_review_for_low_confidence_edges",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
+    },
+    {
+      "kind": "service",
+      "id": "taskSummaryDailyProgressService",
+      "architectureUnit": "主执行环：计划编制",
+      "runtimeScope": "business_core",
+      "assignmentReason": "assembles the tenant-scoped daily task progress read model and responsibility labels behind the task-summary route without redefining metric truth",
       "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
     },
     {

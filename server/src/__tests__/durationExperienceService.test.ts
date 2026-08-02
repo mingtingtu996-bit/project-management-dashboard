@@ -75,7 +75,7 @@ vi.mock('../services/executionFactGovernanceService.js', () => ({
 }))
 
 const {
-  collectDurationExperienceSampleFromTask,
+  collectDurationExperienceSampleFromTask: collectDurationExperienceSampleFromTaskRaw,
   retireDurationExperienceSampleForTask,
 } = await import('../services/durationExperienceService.js')
 
@@ -102,6 +102,26 @@ function completedTask(overrides: Record<string, unknown> = {}) {
     version: 1,
     ...overrides,
   } as any
+}
+
+function executionFactsForDurationTask(task: Record<string, unknown>) {
+  const taskId = String(task.id ?? '')
+  const dateValue = (value: unknown) => value == null || value === '' ? null : String(value).slice(0, 10)
+  return [
+    { entityType: 'task', entityId: taskId, factType: 'task.actual_start_date', value: dateValue(task.actual_start_date) },
+    { entityType: 'task', entityId: taskId, factType: 'task.actual_end_date', value: dateValue(task.actual_end_date) },
+    { entityType: 'task', entityId: taskId, factType: 'task.first_progress_at', value: task.first_progress_at ?? null },
+    { entityType: 'task', entityId: taskId, factType: 'task.progress', value: Number(task.progress ?? 0) },
+    { entityType: 'task', entityId: taskId, factType: 'task.status', value: String(task.status ?? 'todo') },
+  ]
+}
+
+async function collectDurationExperienceSampleFromTask(
+  task: Parameters<typeof collectDurationExperienceSampleFromTaskRaw>[0],
+  options?: Parameters<typeof collectDurationExperienceSampleFromTaskRaw>[1],
+) {
+  mocks.listCurrentExecutionFacts.mockResolvedValueOnce(executionFactsForDurationTask(task as unknown as Record<string, unknown>))
+  return await collectDurationExperienceSampleFromTaskRaw(task, options)
 }
 
 function structuredCauseRow(overrides: Record<string, unknown> = {}) {
@@ -613,6 +633,12 @@ describe('durationExperienceService', () => {
       {
         entityId: 'task-execution-fact-completion',
         entityType: 'task',
+        factType: 'task.first_progress_at',
+        value: null,
+      },
+      {
+        entityId: 'task-execution-fact-completion',
+        entityType: 'task',
         factType: 'task.progress',
         value: 100,
       },
@@ -624,7 +650,7 @@ describe('durationExperienceService', () => {
       },
     ])
 
-    const collected = await collectDurationExperienceSampleFromTask(completedTask({
+    const collected = await collectDurationExperienceSampleFromTaskRaw(completedTask({
       id: 'task-execution-fact-completion',
       status: 'todo',
       progress: 0,
@@ -650,6 +676,17 @@ describe('durationExperienceService', () => {
       actual_duration: 3,
       completed_at: '2026-05-04T00:00:00.000Z',
     }))
+  })
+
+  it('does not collect a completion sample from stale compatibility columns when execution facts are missing', async () => {
+    const task = completedTask({ id: 'task-execution-fact-missing' })
+    mocks.listCurrentExecutionFacts.mockResolvedValue([])
+
+    const collected = await collectDurationExperienceSampleFromTaskRaw(task)
+
+    expect(collected).toBe(false)
+    expect(mocks.insert).not.toHaveBeenCalled()
+    expect(mocks.backtestEarliestPendingDurationAccuracyPrediction).not.toHaveBeenCalled()
   })
 
   it('writes completion samples with shared date-only inclusive duration semantics', async () => {

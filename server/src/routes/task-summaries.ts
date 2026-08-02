@@ -25,7 +25,6 @@ import {
 import { resolveConstructionCalendarContext } from '../services/constructionCalendar.js'
 import { executeSQLOne, supabase } from '../services/dbService.js'
 import {
-  buildDailyTaskProgressSummary,
   buildTaskSummaryCompareResults,
   getTaskActualEndDate,
   getTaskPlannedEndDate,
@@ -34,6 +33,7 @@ import {
   normalizeTaskSummaryComparePeriods,
   resolveDailyTaskProgressWindow,
 } from '../services/taskSummaryCompareService.js'
+import { getDailyTaskProgressReadModel } from '../services/taskSummaryDailyProgressService.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import {
   authenticate,
@@ -630,7 +630,7 @@ router.get('/projects/:id/daily-progress', validateIdParam, requireProjectMember
   const workCalendar = await resolveConstructionCalendarContext({ projectId })
   const {
     targetDate,
-    previousDate: previousDateStr,
+    previousDate,
     dayStartInclusive,
     dayEndExclusive,
   } = resolveDailyTaskProgressWindow({
@@ -638,110 +638,12 @@ router.get('/projects/:id/daily-progress', validateIdParam, requireProjectMember
     timezone: workCalendar.timezone,
   })
 
-  const { data: projectTaskRows, error: projectTaskErr } = await supabase
-    .from('tasks')
-    .select('id')
-    .eq('project_id', projectId)
-
-  if (projectTaskErr) throw new Error(`[daily-progress] 任务ID查询失败: ${projectTaskErr.message}`)
-
-  const projectTaskIds = (projectTaskRows || []).map((row: any) => row.id)
-
-  // 1. 获取当日更新的所有任务（包括进度变化）
-  // 这里先按项目任务ID过滤快照，避免 PostgREST 在嵌套 tasks 关联上生成异常 SQL。
-  const snapshotResult = projectTaskIds.length === 0
-    ? { data: [], error: null }
-    : await supabase
-        .from('task_progress_snapshots')
-        .select(`
-          task_id,
-          progress,
-          snapshot_date,
-          conditions_met_count,
-          conditions_total_count,
-          obstacles_active_count,
-          created_at
-        `)
-        .in('task_id', projectTaskIds)
-        .gte('snapshot_date', previousDateStr)
-        .lte('snapshot_date', targetDate)
-        .order('snapshot_date', { ascending: true })
-        .order('created_at', { ascending: true })
-
-  const { data: snapshots, error: snapErr } = snapshotResult
-
-  if (snapErr) {
-    logger.warn('task_progress_snapshots query failed; daily progress will return insufficient_data', { error: snapErr.message })
-  }
-
-  const snapshotByDateAndTask = new Map<string, Map<string, any>>()
-  for (const snapshot of (snapshots || [])) {
-    const snapshotDate = snapshot.snapshot_date as string
-    if (!snapshotByDateAndTask.has(snapshotDate)) {
-      snapshotByDateAndTask.set(snapshotDate, new Map())
-    }
-    snapshotByDateAndTask.get(snapshotDate)!.set(snapshot.task_id as string, snapshot)
-  }
-
-  const todaySnapshotMap = snapshotByDateAndTask.get(targetDate) ?? new Map<string, any>()
-  const previousSnapshotMap = snapshotByDateAndTask.get(previousDateStr) ?? new Map<string, any>()
-
-  // Task rows provide labels and ownership only; progress deltas remain snapshot-derived.
-  const { data: updatedTasks, error: taskErr } = await supabase
-    .from('tasks')
-    .select('id, title, assignee_user_id, participant_unit_id, status, progress, end_date, updated_at')
-    .eq('project_id', projectId)
-    .gte('updated_at', dayStartInclusive)
-    .lt('updated_at', dayEndExclusive)
-
-  if (taskErr) throw new Error(`[daily-progress] 查询失败: ${taskErr.message}`)
-
-  const { data: projectDailySnapshot, error: projectDailySnapshotError } = await supabase
-    .from('project_daily_snapshot')
-    .select('active_delayed_tasks')
-    .eq('project_id', projectId)
-    .eq('snapshot_date', targetDate)
-    .maybeSingle()
-  if (projectDailySnapshotError) {
-    logger.warn('project_daily_snapshot query failed for daily progress', {
-      projectId,
-      targetDate,
-      error: projectDailySnapshotError.message,
-    })
-  }
-  const delayedTaskCount = Number.isFinite(Number(projectDailySnapshot?.active_delayed_tasks))
-    ? Number(projectDailySnapshot?.active_delayed_tasks)
-    : null
-
-  const [updatedTaskParticipantUnitNameMap, updatedTaskProjectMemberNameMap] = await Promise.all([
-    loadParticipantUnitNameMap(
-      projectId,
-      (updatedTasks || []).map((task: any) => task.participant_unit_id).filter(Boolean),
-    ),
-    getTaskSummaryProjectMemberNameMap(
-      projectId,
-      (updatedTasks || []).map((task: any) => task.assignee_user_id).filter(Boolean),
-    ),
-  ])
-
-  const getUpdatedTaskResponsibleLabel = (task: any) => {
-    const assigneeUserId = normalizeText(task?.assignee_user_id)
-    if (assigneeUserId && updatedTaskProjectMemberNameMap.has(assigneeUserId)) {
-      return updatedTaskProjectMemberNameMap.get(assigneeUserId) || '责任人待确认'
-    }
-    const participantUnitId = normalizeText(task?.participant_unit_id)
-    if (participantUnitId) return updatedTaskParticipantUnitNameMap.get(participantUnitId) || '责任单位待确认'
-    return '未关联责任人'
-  }
-
-  const result = buildDailyTaskProgressSummary({
+  const result = await getDailyTaskProgressReadModel({
+    projectId,
     targetDate,
-    previousDate: previousDateStr,
-    tasks: updatedTasks || [],
-    todaySnapshots: todaySnapshotMap,
-    previousSnapshots: previousSnapshotMap,
-    delayedTaskCount,
-    resolveResponsibleLabel: getUpdatedTaskResponsibleLabel,
+    previousDate,
+    dayStartInclusive,
+    dayEndExclusive,
   })
 
   res.json({ success: true, data: result, timestamp: new Date().toISOString() })

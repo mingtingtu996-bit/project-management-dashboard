@@ -41,8 +41,12 @@ import { readTrustedDurationLearningRuntimeConsumptionsForTask } from './duratio
 import { readTaskStructuredCauseAuthority } from './taskStructuredCauseAuthorityService.js'
 import {
   listCurrentExecutionFacts,
-  type ExecutionFactEvent,
 } from './executionFactGovernanceService.js'
+import {
+  applyTaskExecutionFactAuthority as applyTaskExecutionFactAuthorityProjection,
+  hasTaskExecutionFactAuthority,
+  TASK_EXECUTION_FACT_AUTHORITY_TYPES,
+} from './taskExecutionFactAuthorityService.js'
 
 type SampleStrength = 'strong' | 'medium' | 'weak' | 'unusable'
 
@@ -74,47 +78,6 @@ function normalizeText(value: unknown) {
   return String(value ?? '').trim()
 }
 
-const TASK_DURATION_EXPERIENCE_FACT_TYPES = [
-  'task.actual_start_date',
-  'task.actual_end_date',
-  'task.first_progress_at',
-  'task.progress',
-  'task.status',
-] as const
-
-function applyCurrentTaskExecutionFacts(task: Task, facts: ExecutionFactEvent[]): Task {
-  const authoritativeTask = { ...task }
-  for (const fact of facts) {
-    if (fact.entityType !== 'task' || fact.entityId !== task.id) continue
-    switch (fact.factType) {
-      case 'task.actual_start_date':
-        authoritativeTask.actual_start_date = fact.value == null ? undefined : String(fact.value)
-        break
-      case 'task.actual_end_date':
-        authoritativeTask.actual_end_date = fact.value == null ? undefined : String(fact.value)
-        break
-      case 'task.first_progress_at':
-        authoritativeTask.first_progress_at = fact.value == null ? null : String(fact.value)
-        break
-      case 'task.progress': {
-        const progress = Number(fact.value)
-        authoritativeTask.progress = Number.isFinite(progress) ? progress : 0
-        break
-      }
-      case 'task.status': {
-        const status = String(fact.value ?? '')
-        if (['todo', 'pending', 'in_progress', 'completed', 'blocked', 'cancelled'].includes(status)) {
-          authoritativeTask.status = status as Task['status']
-        }
-        break
-      }
-      default:
-        break
-    }
-  }
-  return authoritativeTask
-}
-
 async function applyTaskExecutionFactAuthority(task: Task): Promise<Task> {
   const projectId = normalizeText(task.project_id)
   const taskId = normalizeText(task.id)
@@ -123,9 +86,9 @@ async function applyTaskExecutionFactAuthority(task: Task): Promise<Task> {
     projectId,
     entityType: 'task',
     entityIds: [taskId],
-    factTypes: [...TASK_DURATION_EXPERIENCE_FACT_TYPES],
+    factTypes: [...TASK_EXECUTION_FACT_AUTHORITY_TYPES],
   })
-  return applyCurrentTaskExecutionFacts(task, facts)
+  return applyTaskExecutionFactAuthorityProjection([task], facts)[0] ?? task
 }
 
 function buildDurationExperienceEvidenceFingerprint(input: {
@@ -711,6 +674,7 @@ export async function collectDurationExperienceSampleFromTask(
 ): Promise<boolean> {
   if (!task?.id || !task.project_id) return false
   task = await applyTaskExecutionFactAuthority(task)
+  if (!hasTaskExecutionFactAuthority(task)) return false
   if (!isCompletedTask({
     status: task.status,
     progress: task.progress,

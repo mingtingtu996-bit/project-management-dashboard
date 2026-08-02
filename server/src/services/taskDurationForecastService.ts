@@ -11,8 +11,13 @@ import { supabase } from './dbService.js'
 import { query as rawQuery } from '../database.js'
 import {
   listCurrentExecutionFacts,
-  type ExecutionFactEvent,
 } from './executionFactGovernanceService.js'
+import {
+  applyTaskExecutionFactAuthority as applyTaskExecutionFactAuthorityProjection,
+  hasTaskExecutionFactAuthority,
+  readTaskExecutionFactAuthorityState,
+  type TaskExecutionFactAuthorityType,
+} from './taskExecutionFactAuthorityService.js'
 import {
   readTaskStructuredCauseAuthority,
   type TaskStructuredCauseAuthority,
@@ -218,37 +223,7 @@ const TASK_FORECAST_EXECUTION_FACT_TYPES = [
   'task.actual_end_date',
   'task.progress',
   'task.status',
-] as const
-
-function applyCurrentTaskExecutionFacts(
-  rows: ForecastTaskRow[],
-  facts: ExecutionFactEvent[],
-): ForecastTaskRow[] {
-  const rowsById = new Map(rows.map((row) => [String(row.id ?? ''), { ...row }]))
-  for (const fact of facts) {
-    const row = rowsById.get(fact.entityId)
-    if (!row || fact.entityType !== 'task') continue
-    switch (fact.factType) {
-      case 'task.actual_start_date':
-        row.actual_start_date = fact.value == null ? null : String(fact.value)
-        break
-      case 'task.actual_end_date':
-        row.actual_end_date = fact.value == null ? null : String(fact.value)
-        break
-      case 'task.progress': {
-        const progress = Number(fact.value)
-        row.progress = Number.isFinite(progress) ? progress : null
-        break
-      }
-      case 'task.status':
-        row.status = fact.value == null ? null : String(fact.value)
-        break
-      default:
-        break
-    }
-  }
-  return rows.map((row) => rowsById.get(String(row.id ?? '')) ?? row)
-}
+] as const satisfies readonly TaskExecutionFactAuthorityType[]
 
 async function applyTaskExecutionFactAuthority(
   projectId: string,
@@ -264,7 +239,7 @@ async function applyTaskExecutionFactAuthority(
     entityIds,
     factTypes: [...TASK_FORECAST_EXECUTION_FACT_TYPES],
   })
-  return applyCurrentTaskExecutionFacts(rows, facts)
+  return applyTaskExecutionFactAuthorityProjection(rows, facts, TASK_FORECAST_EXECUTION_FACT_TYPES)
 }
 
 const TASK_DURATION_FORECAST_CONSUMER_ASSET_KEYS = new Set([
@@ -1933,6 +1908,67 @@ function withRemainingForecastOutputContract(forecast: TaskDurationForecast): Ta
       durationOutputContract: contract,
     } as TaskDurationForecast['calculationContext'],
   }
+}
+
+async function buildExecutionFactAuthorityUnavailableForecast(
+  taskId: string,
+  task: ForecastTaskRow,
+): Promise<TaskDurationForecast> {
+  const workCalendar = await loadWorkCalendar(task)
+  const asOf = businessDateKey(new Date(), workCalendar.timezone)
+  const unavailableReason = 'task_execution_fact_authority_incomplete'
+  const unavailableMetric = (): DurationMetricDto => ({
+    ...buildConstructionProductionDayDurationMetric(null, {
+      asOf,
+      calendar: workCalendar,
+    }),
+    value: null,
+    availability: 'unavailable',
+    unavailableReason,
+  })
+  const authority = readTaskExecutionFactAuthorityState(task)
+
+  return withRemainingForecastOutputContract({
+    taskId,
+    recommendedDurationDays: null,
+    executionReferenceDays: null,
+    conservativeDurationDays: null,
+    optimisticRemainingDays: null,
+    remainingDurationDays: null,
+    remainingDuration: unavailableMetric(),
+    conservativeRemainingDays: null,
+    forecastFinishDate: null,
+    forecastDelay: unavailableMetric(),
+    forecastDelayDays: null,
+    delayRiskIndex: null,
+    confidenceLevel: 'unavailable',
+    confidenceScore: 0,
+    forecastSource: 'execution_fact_authority_unavailable',
+    durationCalibrationSource: null,
+    durationProvenance: null,
+    businessReason: 'Current task execution facts are incomplete; the remaining forecast is unavailable.',
+    calculationContext: {
+      remaining_duration_forecast: {
+        availability: 'unavailable',
+        unavailableReason,
+        missingFactTypes: authority.missingFactTypes,
+      },
+    } as unknown as TaskDurationForecast['calculationContext'],
+    dataMaturity: 'L0',
+    topFactors: ['Current task execution facts are incomplete.'],
+    businessFactorBadges: [],
+    forecastSources: {
+      availability: 'unavailable',
+      unavailableReason,
+      missingFactTypes: authority.missingFactTypes,
+    },
+    probabilityDuration: null,
+    probabilityDurationMetrics: {
+      p20RemainingDuration: unavailableMetric(),
+      p50RemainingDuration: unavailableMetric(),
+      p80RemainingDuration: unavailableMetric(),
+    },
+  })
 }
 
 function buildTaskRemainingForecastSeedLineage(task: ForecastTaskRow | null, suggestion: DurationSuggestionResult) {
@@ -6180,6 +6216,11 @@ async function refreshTaskDurationForecast(
 
 export async function forecastTaskDuration(taskId: string, options?: ForecastTaskDurationOptions): Promise<TaskDurationForecast> {
   const normalizedOptions = normalizeForecastOptions(options)
+  const task = await loadTask(taskId, normalizedOptions)
+  if (task && !hasTaskExecutionFactAuthority(task)) {
+    return buildExecutionFactAuthorityUnavailableForecast(taskId, task)
+  }
+
   if (normalizedOptions.useCache) {
     const now = new Date()
     const currentForecast = await loadCurrentForecast(taskId, normalizedOptions)
@@ -6197,7 +6238,6 @@ export async function forecastTaskDuration(taskId: string, options?: ForecastTas
     }
   }
 
-  const task = await loadTask(taskId, normalizedOptions)
   const forecast = await refreshTaskDurationForecast(taskId, task, normalizedOptions)
   const runtimeArtifactPublications = buildTaskDurationForecastRuntimeArtifactPublications(forecast)
   const artifacts = buildTaskDurationForecastConsumedArtifacts({
