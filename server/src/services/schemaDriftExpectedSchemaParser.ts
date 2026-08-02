@@ -23,6 +23,8 @@ export function buildExpectedSchemaFromMigrationSql(sql: string): SchemaDriftExp
   applyAlterTableStatements(normalizedSql, tables)
   applyPolicyTemplateRuntimePublicationRollbackStatus(sql, tables)
   applyIndexStatements(normalizedSql, tables)
+  applyAlterIndexStatements(normalizedSql, tables)
+  applyDynamicallyDiscoveredForeignKeyDrops(sql, tables)
   applyDroppedColumnDependencyCleanup(normalizedSql, tables)
   applyRlsStatements(normalizedSql, tables)
   applyPolicyStatements(normalizedSql, tables)
@@ -389,6 +391,10 @@ function applyAlterTableOperation(
     const column = table?.columns.find((item) => item.columnName === fromColumnName)
     if (table && column && toColumnName) {
       column.columnName = toColumnName
+      table.constraints = table.constraints.map((constraint) => ({
+        ...constraint,
+        definition: renameConstraintLocalReferences(constraint.definition, fromColumnName, toColumnName),
+      }))
       table.columns = table.columns.sort((left, right) => left.columnName.localeCompare(right.columnName))
     }
     return
@@ -482,16 +488,123 @@ function applyIndexStatements(sql: string, tables: Map<string, MutableExpectedTa
     if (!tableName || !indexName) continue
 
     const table = ensureExpectedTable(tables, tableName)
+    const normalizedDefinition = normalizeIndexDefinition({
+      indexName,
+      tableName,
+      unique: Boolean(match.groups?.unique),
+      body: match.groups?.body ?? '',
+    })
     upsertIndex(table, {
       indexName,
-      definition: normalizeIndexDefinition({
-        indexName,
+      definition: applyLaterColumnRenamesToIndex(
+        sql,
+        match.index + match[0].length,
         tableName,
-        unique: Boolean(match.groups?.unique),
-        body: match.groups?.body ?? '',
-      }),
+        normalizedDefinition,
+      ),
     })
   }
+}
+
+function applyLaterColumnRenamesToIndex(sql: string, start: number, tableName: string, definition: string) {
+  const onTableMatch = definition.match(/\s+on\s+public\.[^\s]+\s+/i)
+  if (!onTableMatch || onTableMatch.index === undefined) return definition
+
+  let body = definition.slice(onTableMatch.index + onTableMatch[0].length)
+  const alterTablePattern = /alter\s+table\s+(?:if\s+exists\s+)?(?<table>[a-zA-Z0-9_".]+)\s+(?<body>[\s\S]*?);/gi
+  alterTablePattern.lastIndex = start
+  let alterMatch: RegExpExecArray | null
+
+  while ((alterMatch = alterTablePattern.exec(sql)) !== null) {
+    if (normalizeObjectName(alterMatch.groups?.table) !== tableName) continue
+    for (const operation of splitTopLevelComma(alterMatch.groups?.body ?? '')) {
+      const rename = operation.match(/^rename\s+column\s+(?<from>[a-zA-Z0-9_".]+)\s+to\s+(?<to>[a-zA-Z0-9_".]+)$/i)
+      const fromColumnName = normalizeObjectName(rename?.groups?.from)
+      const toColumnName = normalizeObjectName(rename?.groups?.to)
+      if (!fromColumnName || !toColumnName) continue
+      body = replaceLocalIndexIdentifier(body, fromColumnName, toColumnName)
+    }
+  }
+
+  return `${definition.slice(0, onTableMatch.index + onTableMatch[0].length)}${body}`
+}
+
+function applyAlterIndexStatements(sql: string, tables: Map<string, MutableExpectedTable>) {
+  const renamePattern = /alter\s+index\s+(?:if\s+exists\s+)?(?<from>[a-zA-Z0-9_".]+)\s+rename\s+to\s+(?<to>[a-zA-Z0-9_".]+)\s*;/gi
+  let match: RegExpExecArray | null
+
+  while ((match = renamePattern.exec(sql)) !== null) {
+    const fromIndexName = normalizeObjectName(match.groups?.from)
+    const toIndexName = normalizeObjectName(match.groups?.to)
+    if (!fromIndexName || !toIndexName) continue
+
+    for (const table of tables.values()) {
+      const index = table.indexes.find((candidate) => candidate.indexName === fromIndexName)
+      if (!index) continue
+      index.indexName = toIndexName
+      index.definition = renameIndexObjectInDefinition(index.definition, toIndexName)
+      table.indexes = table.indexes.sort((left, right) => left.indexName.localeCompare(right.indexName))
+      break
+    }
+  }
+}
+
+function renameIndexObjectInDefinition(definition: string, indexName: string) {
+  return definition.replace(
+    /^(CREATE\s+(?:UNIQUE\s+)?INDEX\s+)(?:"[^"]+"|[a-zA-Z0-9_]+)/i,
+    `$1${indexName}`,
+  )
+}
+
+function applyDynamicallyDiscoveredForeignKeyDrops(sql: string, tables: Map<string, MutableExpectedTable>) {
+  const doBlockPattern = /\bdo\s+\$([a-zA-Z0-9_]*)\$([\s\S]*?)\$\1\$\s*;/gi
+  let blockMatch: RegExpExecArray | null
+
+  while ((blockMatch = doBlockPattern.exec(sql)) !== null) {
+    const body = blockMatch[2] ?? ''
+    if (!/\bc\.contype\s*=\s*'f'/i.test(body)) continue
+    if (!/\bexecute\s+format\s*\(\s*'alter\s+table\s+[^']+\s+drop\s+constraint\s+%i'/i.test(body)) continue
+
+    const tableName = normalizeObjectName(
+      body.match(/\bc\.conrelid\s*=\s*'(?<table>[a-zA-Z0-9_".]+)'\s*::\s*regclass/i)?.groups?.table,
+    )
+    const columnName = normalizeObjectName(
+      body.match(/\ba\.attname\s*=\s*'(?<column>[a-zA-Z0-9_"]+)'/i)?.groups?.column,
+    )
+    const table = tableName ? tables.get(tableName) : null
+    if (!table || !columnName) continue
+
+    const replacementConstraintNames = findLaterForeignKeyConstraintNames(
+      sql.slice(blockMatch.index + blockMatch[0].length),
+      tableName,
+      columnName,
+    )
+    table.constraints = table.constraints.filter((constraint) => (
+      constraint.constraintType !== 'foreign_key'
+      || !constraintDependsOnLocalColumn(constraint, columnName)
+      || replacementConstraintNames.has(constraint.constraintName)
+    ))
+  }
+}
+
+function findLaterForeignKeyConstraintNames(sql: string, tableName: string, columnName: string) {
+  const names = new Set<string>()
+  const alterTablePattern = /alter\s+table\s+(?:if\s+exists\s+)?(?<table>[a-zA-Z0-9_".]+)\s+(?<body>[\s\S]*?);/gi
+  let match: RegExpExecArray | null
+
+  while ((match = alterTablePattern.exec(sql)) !== null) {
+    if (normalizeObjectName(match.groups?.table) !== tableName) continue
+    for (const operation of splitTopLevelComma(match.groups?.body ?? '')) {
+      const add = operation.match(/^add\s+constraint\s+(?<name>"[^"]+"|[a-zA-Z0-9_]+)\s+(?<definition>[\s\S]+)$/i)
+      if (!add?.groups?.name || !add.groups.definition) continue
+      const constraint = parseNamedConstraint(tableName, add.groups.name, add.groups.definition)
+      if (constraint?.constraintType === 'foreign_key' && constraintDependsOnLocalColumn(constraint, columnName)) {
+        names.add(constraint.constraintName)
+      }
+    }
+  }
+
+  return names
 }
 
 function applyDroppedColumnDependencyCleanup(sql: string, tables: Map<string, MutableExpectedTable>) {
@@ -886,13 +999,16 @@ function parseColumnDefinition(
   const rest = nameMatch?.groups?.rest?.trim()
   if (!columnName || !rest) return null
 
-  const typeMatch = rest.match(/^(?<type>.+?)(?:\s+(?:collate|constraint|not\s+null|null|default|primary\s+key|references|unique|check)\b|$)/i)
+  const typeMatch = rest.match(/^(?<type>.+?)(?:\s+(?:collate|constraint|not\s+null|null|default|generated|primary\s+key|references|unique|check)\b|$)/i)
   const rawDataType = typeMatch?.groups?.type?.trim() ?? rest
+  const columnClauses = rest.slice(rawDataType.length)
+  const nullabilityClauses = stripCheckConstraintClauses(columnClauses)
   const dataType = normalizePostgresType(rawDataType)
   const serialDefaultExpression = tableName ? serialColumnDefaultExpression(rawDataType, tableName, columnName) : null
-  const defaultExpression = extractColumnDefault(rest) ?? serialDefaultExpression
-  const nullable = !/\bnot\s+null\b/i.test(rest)
-    && !/\bprimary\s+key\b/i.test(rest)
+  const defaultExpression = extractColumnDefault(columnClauses) ?? serialDefaultExpression
+  const nullable = !/\bnot\s+null\b/i.test(nullabilityClauses)
+    && !/\bprimary\s+key\b/i.test(nullabilityClauses)
+    && !/\bgenerated\s+(?:always|by\s+default)\s+as\s+identity\b/i.test(columnClauses)
     && !tablePrimaryKeys.has(columnName)
 
   return {
@@ -1111,6 +1227,86 @@ function normalizeIndexDefinition(input: {
     .replace(/\(\s+/g, '(')
 
   return `CREATE ${input.unique ? 'UNIQUE ' : ''}INDEX ${input.indexName} ON public.${input.tableName} ${body}`.trim()
+}
+
+function stripCheckConstraintClauses(value: string) {
+  let result = ''
+  let cursor = 0
+  const checkPattern = /\bcheck\s*\(/gi
+  let match: RegExpExecArray | null
+
+  while ((match = checkPattern.exec(value)) !== null) {
+    const openParen = value.indexOf('(', match.index)
+    const closeParen = openParen === -1 ? -1 : findMatchingParenthesis(value, openParen)
+    if (closeParen === -1) break
+    result += value.slice(cursor, match.index)
+    cursor = closeParen + 1
+    checkPattern.lastIndex = cursor
+  }
+
+  return `${result}${value.slice(cursor)}`
+}
+
+function renameConstraintLocalReferences(value: string, from: string, to: string) {
+  const referencesMatch = value.match(/\breferences\b/i)
+  const localPart = referencesMatch?.index === undefined ? value : value.slice(0, referencesMatch.index)
+  const referencedPart = referencesMatch?.index === undefined ? '' : value.slice(referencesMatch.index)
+  return `${replaceSqlIdentifierOutsideSingleQuotes(localPart, from, to)}${referencedPart}`
+}
+
+function replaceSqlIdentifierOutsideSingleQuotes(value: string, from: string, to: string) {
+  const identifierPattern = new RegExp(`(?<![a-zA-Z0-9_])"?${escapeRegExp(from)}"?(?![a-zA-Z0-9_])`, 'gi')
+  return value.replace(/'(?:''|[^'])*'|([^']+)/gs, (segment, outsideQuotes: string | undefined) => (
+    outsideQuotes === undefined ? segment : outsideQuotes.replace(identifierPattern, to)
+  ))
+}
+
+function replaceLocalIndexIdentifier(value: string, from: string, to: string) {
+  const tokenPattern = /'(?:''|[^'])*'|"(?:""|[^"])*"|[a-zA-Z_][a-zA-Z0-9_$]*|./gs
+  const normalizedFrom = from.toLowerCase()
+
+  return value.replace(tokenPattern, (token, offset: number) => {
+    const identifier = token.startsWith('"')
+      ? token.slice(1, -1).replace(/""/g, '"')
+      : token
+    if (identifier.toLowerCase() !== normalizedFrom || token.startsWith("'") || token === '') return token
+
+    const before = value.slice(0, offset).replace(/\s+$/g, '')
+    const after = value.slice(offset + token.length).replace(/^\s+/g, '')
+    if (before.endsWith('.') || before.endsWith('::') || /\bcollate$/i.test(before) || after.startsWith('.') || after.startsWith('(')) {
+      return token
+    }
+
+    return to
+  })
+}
+
+function findMatchingParenthesis(value: string, openIndex: number) {
+  let depth = 0
+  let singleQuoted = false
+  let doubleQuoted = false
+  for (let index = openIndex; index < value.length; index += 1) {
+    const character = value[index]
+    const next = value[index + 1]
+    if (singleQuoted) {
+      if (character === "'" && next === "'") index += 1
+      else if (character === "'") singleQuoted = false
+      continue
+    }
+    if (doubleQuoted) {
+      if (character === '"' && next === '"') index += 1
+      else if (character === '"') doubleQuoted = false
+      continue
+    }
+    if (character === "'") singleQuoted = true
+    else if (character === '"') doubleQuoted = true
+    else if (character === '(') depth += 1
+    else if (character === ')') {
+      depth -= 1
+      if (depth === 0) return index
+    }
+  }
+  return -1
 }
 
 function escapeRegExp(value: string) {

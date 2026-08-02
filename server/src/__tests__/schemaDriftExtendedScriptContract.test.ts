@@ -14,4 +14,12 @@ describe('extended schema drift script contract', () => {
     expect(source).not.toContain('DRIFT_COVERAGE_BACKLOG')
     expect(source).toContain('coverageBacklog: []')
   })
+
+  it('does not hide an index solely because another table has a foreign key that references it', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/scripts/check-schema-drift.ts'), 'utf8')
+
+    expect(source).toMatch(
+      /LEFT JOIN pg_constraint con\s+ON con\.conindid = index_class\.oid\s+AND con\.conrelid = table_class\.oid/,
+    )
+  })
 })

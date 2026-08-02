@@ -1,3 +1,6 @@
+import {
+  normalizeViewOptions,
+} from './schemaDriftExtendedObjectService.js'
 import type {
   SchemaDriftEnum,
   SchemaDriftExtendedCatalog,
@@ -34,6 +37,7 @@ export type ViewCatalogRow = {
   view_name: string
   materialized: boolean
   definition: string
+  reloptions?: string[] | null
 }
 
 export type EnumCatalogRow = {
@@ -120,6 +124,7 @@ export async function introspectActualExtendedSchema(
       SELECT namespace.nspname AS schema_name,
              relation.relname AS view_name,
              relation.relkind = 'm' AS materialized,
+             relation.reloptions,
              pg_get_viewdef(relation.oid, TRUE) AS definition
       FROM pg_class relation
       JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
@@ -333,6 +338,7 @@ export function buildActualExtendedSchemaCatalog(
         viewName,
         materialized: row.materialized,
         definition: row.definition,
+        options: normalizeViewOptions((row.reloptions ?? []).join(', ')),
       }
     })),
     enums: sortByKey(enumMap.values()),

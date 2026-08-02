@@ -1199,6 +1199,138 @@ describe('migrationSafetyGateService', () => {
     expect(result.status).toBe('pass')
   })
 
+  it('normalizes current PostgreSQL constraint, expression-index and policy catalog output', () => {
+    const result = evaluateSchemaDrift({
+      expectedTables: [{
+        tableName: 'duration_assets',
+        columns: [column('publication_key', 'text'), column('metadata', 'jsonb')],
+        constraints: [
+          constraint(
+            'duration_assets_resolution_state_check',
+            'check_constraint',
+            "CHECK ((status = 'open' AND decision_reason IS NULL) OR (status = 'approved' AND NULLIF(BTRIM(decision_reason), '') IS NOT NULL))",
+          ),
+          constraint(
+            'duration_assets_publication_fkey',
+            'foreign_key',
+            'FOREIGN KEY (publication_key, asset_key) REFERENCES duration_publications (publication_key, asset_key) ON DELETE CASCADE',
+          ),
+        ],
+        indexes: [
+          index(
+            'uq_duration_assets_candidate_operation',
+            "CREATE UNIQUE INDEX uq_duration_assets_candidate_operation ON public.duration_assets (company_id, project_id, (metadata ->> 'candidate_operation_id')) NULLS NOT DISTINCT WHERE is_active = TRUE AND metadata ->> 'candidate_operation_id' IS NOT NULL",
+          ),
+          index(
+            'idx_duration_assets_review_queue',
+            "CREATE INDEX idx_duration_assets_review_queue ON public.duration_assets (company_id, confidence DESC, created_at ASC) WHERE status = 'candidate'",
+          ),
+        ],
+        rls: {
+          enabled: true,
+          forced: false,
+          policies: [{
+            policyName: 'duration_assets_member_read',
+            command: 'select',
+            usingExpression: 'benchmark.company_id IS NOT DISTINCT FROM duration_assets.company_id AND benchmark.project_id IS NOT DISTINCT FROM duration_assets.project_id',
+            withCheckExpression: null,
+          }],
+        },
+      }],
+      actualTables: [{
+        tableName: 'duration_assets',
+        columns: [column('publication_key', 'text'), column('metadata', 'jsonb')],
+        constraints: [
+          constraint(
+            'duration_assets_resolution_state_check',
+            'check_constraint',
+            "CHECK ((((status = 'open'::text) AND (decision_reason IS NULL)) OR ((status = 'approved'::text) AND (NULLIF(btrim(decision_reason), ''::text) IS NOT NULL))))",
+          ),
+          constraint(
+            'duration_assets_publication_fkey',
+            'foreign_key',
+            'FOREIGN KEY (publication_key, asset_key) REFERENCES duration_publications(publication_key, asset_key) ON DELETE CASCADE',
+          ),
+        ],
+        indexes: [
+          index(
+            'uq_duration_assets_candidate_operation',
+            "CREATE UNIQUE INDEX uq_duration_assets_candidate_operation ON public.duration_assets USING btree (company_id, project_id, ((metadata ->> 'candidate_operation_id'::text))) NULLS NOT DISTINCT WHERE ((is_active = true) AND ((metadata ->> 'candidate_operation_id'::text) IS NOT NULL))",
+          ),
+          index(
+            'idx_duration_assets_review_queue',
+            "CREATE INDEX idx_duration_assets_review_queue ON public.duration_assets USING btree (company_id, confidence DESC, created_at) WHERE (status = 'candidate'::text)",
+          ),
+        ],
+        rls: {
+          enabled: true,
+          forced: false,
+          policies: [{
+            policyName: 'duration_assets_member_read',
+            command: 'select',
+            usingExpression: '(NOT (benchmark.company_id IS DISTINCT FROM duration_assets.company_id)) AND (NOT (benchmark.project_id IS DISTINCT FROM duration_assets.project_id))',
+            withCheckExpression: null,
+          }],
+        },
+      }],
+    })
+
+    expect(result).toEqual(expect.objectContaining({ status: 'pass', blockingDrift: [] }))
+  })
+
+  it('normalizes PostgreSQL JSON, role and NOT EXISTS policy rewrites', () => {
+    const result = evaluateSchemaDrift({
+      expectedTables: [{
+        tableName: 'runtime_outbox',
+        columns: [column('company_id', 'uuid'), column('scope_snapshot', 'jsonb')],
+        rls: {
+          enabled: true,
+          forced: false,
+          policies: [{
+            policyName: 'runtime_outbox_insert',
+            command: 'insert',
+            usingExpression: null,
+            withCheckExpression: `
+              current_user = 'service_role'
+              AND event_key = scope_snapshot ->> 'eventKey'
+              AND company_id::text = scope_snapshot ->> 'companyId'
+              AND jsonb_typeof(scope_snapshot) = 'object'
+              AND NOT EXISTS (
+                SELECT 1 FROM public.tasks task
+                WHERE task.id = subject_id::uuid
+              )
+            `,
+          }],
+        },
+      }],
+      actualTables: [{
+        tableName: 'runtime_outbox',
+        columns: [column('company_id', 'uuid'), column('scope_snapshot', 'jsonb')],
+        rls: {
+          enabled: true,
+          forced: false,
+          policies: [{
+            policyName: 'runtime_outbox_insert',
+            command: 'insert',
+            usingExpression: null,
+            withCheckExpression: `
+              ((CURRENT_USER = 'service_role'::name)
+              AND (event_key = (scope_snapshot ->> 'eventKey'::text))
+              AND ((company_id)::text = (scope_snapshot ->> 'companyId'::text))
+              AND (jsonb_typeof(scope_snapshot) = 'object'::text)
+              AND (NOT (EXISTS (
+                SELECT 1 FROM tasks task
+                WHERE (task.id = (subject_id)::uuid)
+              ))))
+            `,
+          }],
+        },
+      }],
+    })
+
+    expect(result).toEqual(expect.objectContaining({ status: 'pass', blockingDrift: [] }))
+  })
+
   it('keeps public and private membership functions distinct without a migration-level rewrite', () => {
     const result = evaluateSchemaDrift({
       expectedTables: [{
@@ -1238,6 +1370,231 @@ describe('migrationSafetyGateService', () => {
         driftType: 'policy_using_mismatch',
       }),
     ])
+  })
+
+  it('normalizes catalog rewrites for runtime publication lineage policies', () => {
+    const expectedPredicate = `
+      (current_user = 'workbuddy_runtime' OR pg_has_role(current_user, 'workbuddy_runtime', 'member'))
+      AND jsonb_typeof(runtime_consumptions.source_evidence_refs) = 'array'
+      AND runtime_consumptions.consumption_context ->> 'authoritySource' = 'runtime_resolver_publication_set'
+      AND EXISTS (
+        SELECT 1
+        FROM public.runtime_publications publication
+        WHERE publication.publication_key = runtime_consumptions.publication_key
+          AND publication.monitoring_status IN ('pending', 'collecting', 'passed')
+          AND (
+            publication.scope_level = 'global'
+            OR publication.industry_key = NULLIF(runtime_consumptions.consumption_context ->> 'industryKey', '')
+          )
+      )
+    `
+    const actualPredicate = `
+      (((CURRENT_USER = 'workbuddy_runtime'::name)
+      OR pg_has_role(CURRENT_USER, 'workbuddy_runtime'::name, 'member'::text))
+      AND (jsonb_typeof(source_evidence_refs) = 'array'::text)
+      AND ((consumption_context ->> 'authoritySource'::text) = 'runtime_resolver_publication_set'::text)
+      AND (EXISTS (
+        SELECT 1
+        FROM runtime_publications publication
+        WHERE ((publication.publication_key = runtime_consumptions.publication_key)
+          AND (publication.monitoring_status = ANY (ARRAY['pending'::text, 'collecting'::text, 'passed'::text]))
+          AND ((publication.scope_level = 'global'::text)
+            OR (publication.industry_key = NULLIF((runtime_consumptions.consumption_context ->> 'industryKey'::text), ''::text))))
+      )))
+    `
+    const result = evaluateSchemaDrift({
+      expectedTables: [{
+        tableName: 'runtime_consumptions',
+        columns: [column('publication_key', 'text')],
+        rls: {
+          enabled: true,
+          forced: true,
+          policies: [{
+            policyName: 'runtime_consumptions_insert',
+            command: 'insert',
+            usingExpression: null,
+            withCheckExpression: expectedPredicate,
+          }],
+        },
+      }],
+      actualTables: [{
+        tableName: 'runtime_consumptions',
+        columns: [column('publication_key', 'text')],
+        rls: {
+          enabled: true,
+          forced: true,
+          policies: [{
+            policyName: 'runtime_consumptions_insert',
+            command: 'insert',
+            usingExpression: null,
+            withCheckExpression: actualPredicate,
+          }],
+        },
+      }],
+    })
+
+    expect(result).toEqual(expect.objectContaining({ status: 'pass', blockingDrift: [] }))
+
+    const changedResult = evaluateSchemaDrift({
+      expectedTables: [{
+        tableName: 'runtime_consumptions',
+        columns: [column('publication_key', 'text')],
+        rls: {
+          enabled: true,
+          forced: true,
+          policies: [{
+            policyName: 'runtime_consumptions_insert',
+            command: 'insert',
+            usingExpression: null,
+            withCheckExpression: expectedPredicate,
+          }],
+        },
+      }],
+      actualTables: [{
+        tableName: 'runtime_consumptions',
+        columns: [column('publication_key', 'text')],
+        rls: {
+          enabled: true,
+          forced: true,
+          policies: [{
+            policyName: 'runtime_consumptions_insert',
+            command: 'insert',
+            usingExpression: null,
+            withCheckExpression: actualPredicate.replace("'passed'::text", "'failed'::text"),
+          }],
+        },
+      }],
+    })
+    expect(changedResult).toEqual(expect.objectContaining({
+      status: 'fail',
+      blockingDrift: expect.arrayContaining([
+        expect.objectContaining({ driftType: 'policy_with_check_mismatch' }),
+      ]),
+    }))
+  })
+
+  it('normalizes catalog rewrites for JSONB CASE check constraints', () => {
+    const expectedDefinition = `CHECK (
+      input_subject_ids ? subject_id::text
+      AND COALESCE(jsonb_array_length(
+        CASE
+          WHEN jsonb_typeof(payload -> 'authoritativeRuntimeLineages') = 'array'
+          THEN payload -> 'authoritativeRuntimeLineages'
+          ELSE '[]'::jsonb
+        END
+      ), 0) = 0
+    )`
+    const actualDefinition = `CHECK (((input_subject_ids ? (subject_id)::text)
+      AND (COALESCE(jsonb_array_length(
+        CASE
+          WHEN (jsonb_typeof((payload -> 'authoritativeRuntimeLineages'::text)) = 'array'::text)
+          THEN (payload -> 'authoritativeRuntimeLineages'::text)
+          ELSE '[]'::jsonb
+        END
+      ), 0) = 0)))`
+    const result = evaluateSchemaDrift({
+      expectedTables: [{
+        tableName: 'runtime_outbox',
+        columns: [column('event_key', 'text')],
+        constraints: [constraint('runtime_outbox_event_contract_check', 'check_constraint', expectedDefinition)],
+      }],
+      actualTables: [{
+        tableName: 'runtime_outbox',
+        columns: [column('event_key', 'text')],
+        constraints: [constraint('runtime_outbox_event_contract_check', 'check_constraint', actualDefinition)],
+      }],
+    })
+
+    expect(result).toEqual(expect.objectContaining({ status: 'pass', blockingDrift: [] }))
+  })
+
+  it('matches unnamed PostgreSQL check constraints by equivalent definition', () => {
+    const result = evaluateSchemaDrift({
+      expectedTables: [{
+        tableName: 'structured_cause_attributions',
+        columns: [column('status', 'text')],
+        constraints: [constraint(
+          "structured_cause_attributions_not_auto_confirmed_or_status_check",
+          'check_constraint',
+          "CHECK (NOT auto_confirmed OR (status = 'confirmed' AND responsibility_class IS NULL))",
+        )],
+      }],
+      actualTables: [{
+        tableName: 'structured_cause_attributions',
+        columns: [column('status', 'text')],
+        constraints: [constraint(
+          'structured_cause_attributions_check3',
+          'check_constraint',
+          "CHECK (((NOT auto_confirmed) OR ((status = 'confirmed'::text) AND (responsibility_class IS NULL))))",
+        )],
+      }],
+    })
+
+    expect(result).toEqual(expect.objectContaining({ status: 'pass', blockingDrift: [] }))
+  })
+
+  it('normalizes catalog rewrites for runtime update cancellation policies', () => {
+    const expectedPredicate = `
+      (current_user = 'workbuddy_runtime' OR pg_has_role(current_user, 'workbuddy_runtime', 'member'))
+      AND public.runtime_outbox_row_is_governable(
+        runtime_outbox.company_id,
+        runtime_outbox.project_id,
+        runtime_outbox.subject_type,
+        runtime_outbox.subject_id,
+        runtime_outbox.input_subject_ids
+      )
+      AND (
+        public.runtime_outbox_row_is_authorized(runtime_outbox.event_type, runtime_outbox.payload)
+        OR (
+          runtime_outbox.processing_status = 'cancelled'
+          AND runtime_outbox.cancelled_at IS NOT NULL
+          AND runtime_outbox.cancellation_scope_snapshot ->> 'eventKey' = runtime_outbox.event_key
+          AND runtime_outbox.cancellation_scope_snapshot ->> 'companyId' = runtime_outbox.company_id::text
+        )
+      )
+    `
+    const actualPredicate = `
+      (((CURRENT_USER = 'workbuddy_runtime'::name)
+      OR pg_has_role(CURRENT_USER, 'workbuddy_runtime'::name, 'member'::text))
+      AND runtime_outbox_row_is_governable(company_id, project_id, subject_type, subject_id, input_subject_ids)
+      AND (runtime_outbox_row_is_authorized(event_type, payload)
+        OR ((processing_status = 'cancelled'::text)
+          AND (cancelled_at IS NOT NULL)
+          AND ((cancellation_scope_snapshot ->> 'eventKey'::text) = event_key)
+          AND ((cancellation_scope_snapshot ->> 'companyId'::text) = (company_id)::text))))
+    `
+    const result = evaluateSchemaDrift({
+      expectedTables: [{
+        tableName: 'runtime_outbox',
+        columns: [column('event_key', 'text')],
+        rls: {
+          enabled: true,
+          forced: true,
+          policies: [{
+            policyName: 'runtime_outbox_update',
+            command: 'update',
+            usingExpression: expectedPredicate,
+            withCheckExpression: expectedPredicate,
+          }],
+        },
+      }],
+      actualTables: [{
+        tableName: 'runtime_outbox',
+        columns: [column('event_key', 'text')],
+        rls: {
+          enabled: true,
+          forced: true,
+          policies: [{
+            policyName: 'runtime_outbox_update',
+            command: 'update',
+            usingExpression: actualPredicate,
+            withCheckExpression: actualPredicate,
+          }],
+        },
+      }],
+    })
+
+    expect(result).toEqual(expect.objectContaining({ status: 'pass', blockingDrift: [] }))
   })
 })
 

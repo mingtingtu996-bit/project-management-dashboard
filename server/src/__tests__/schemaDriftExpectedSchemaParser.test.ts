@@ -6,6 +6,164 @@ import { describe, expect, it } from 'vitest'
 import { buildExpectedSchemaFromMigrationSql } from '../services/schemaDriftExpectedSchemaParser.js'
 
 describe('schemaDriftExpectedSchemaParser', () => {
+  it('limits nullability and identity parsing to the column declaration clauses', () => {
+    const expectedTables = buildExpectedSchemaFromMigrationSql(`
+      CREATE TABLE public.duration_learning_runtime_consumptions (
+      sequence_id BIGINT GENERATED ALWAYS AS IDENTITY,
+      generation_batch_id TEXT NULL
+          CHECK (generation_batch_id IS NULL OR NULLIF(btrim(generation_batch_id), '') IS NOT NULL),
+      template_id TEXT NULL
+          CHECK (template_id IS NULL OR NULLIF(btrim(template_id), '') IS NOT NULL)
+      ,value TEXT CHECK (value IS NOT NULL) NOT NULL
+      );
+    `)
+
+    const columns = expectedTables[0]?.columns
+    expect(columns).toEqual(expect.arrayContaining([
+      expect.objectContaining({ columnName: 'sequence_id', dataType: 'bigint' }),
+      expect.objectContaining({ columnName: 'sequence_id', nullable: false }),
+      expect.objectContaining({ columnName: 'generation_batch_id', nullable: true }),
+      expect.objectContaining({ columnName: 'template_id', nullable: true }),
+      expect.objectContaining({ columnName: 'value', nullable: false }),
+    ]))
+  })
+
+  it('replays column and index renames into dependent expected definitions', () => {
+    const expectedTables = buildExpectedSchemaFromMigrationSql(`
+      CREATE TABLE public.schedule_acceleration_recommendations (
+        id UUID PRIMARY KEY,
+        created_by UUID REFERENCES public.users(id),
+        created_at TIMESTAMPTZ NOT NULL
+      );
+      CREATE INDEX idx_schedule_acceleration_recommendations_project_created
+        ON public.schedule_acceleration_recommendations (created_at);
+
+      ALTER TABLE public.schedule_acceleration_recommendations
+        RENAME COLUMN created_by TO issued_by;
+      ALTER TABLE public.schedule_acceleration_recommendations
+        RENAME COLUMN created_at TO issued_at;
+      ALTER INDEX IF EXISTS public.idx_schedule_acceleration_recommendations_project_created
+        RENAME TO idx_schedule_acceleration_recommendations_project_issued;
+    `)
+
+    const table = expectedTables[0]
+    expect(table?.constraints).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        constraintName: 'schedule_acceleration_recommendations_created_by_fkey',
+        definition: 'FOREIGN KEY (issued_by) REFERENCES users(id)',
+      }),
+    ]))
+    expect(table?.indexes).toEqual([
+      expect.objectContaining({
+        indexName: 'idx_schedule_acceleration_recommendations_project_issued',
+        definition: expect.stringContaining('(issued_at)'),
+      }),
+    ])
+  })
+
+  it('renames only local dependency columns and preserves later same-name columns', () => {
+    const expectedTables = buildExpectedSchemaFromMigrationSql(`
+      CREATE TABLE public.parent (id UUID PRIMARY KEY);
+      CREATE TABLE public.child (
+        id UUID,
+        parent_id UUID REFERENCES public.parent(id)
+      );
+      CREATE INDEX child_id_before_rename ON public.child (id);
+
+      ALTER TABLE public.child RENAME COLUMN id TO child_id;
+      ALTER TABLE public.child ADD COLUMN id UUID;
+      CREATE INDEX child_id_after_rename ON public.child (id);
+    `)
+
+    const child = expectedTables.find((table) => table.tableName === 'child')
+    expect(child?.constraints).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        definition: 'FOREIGN KEY (parent_id) REFERENCES parent(id)',
+      }),
+    ]))
+    expect(child?.indexes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        indexName: 'child_id_before_rename',
+        definition: expect.stringContaining('(child_id)'),
+      }),
+      expect.objectContaining({
+        indexName: 'child_id_after_rename',
+        definition: expect.stringContaining('(id)'),
+      }),
+    ]))
+  })
+
+  it('renames an index object without rewriting a same-named local column', () => {
+    const expectedTables = buildExpectedSchemaFromMigrationSql(`
+      CREATE TABLE public.child (id UUID);
+      CREATE INDEX id ON public.child (id);
+      ALTER INDEX public.id RENAME TO child_id_index;
+    `)
+
+    expect(expectedTables.find((table) => table.tableName === 'child')?.indexes).toEqual([
+      expect.objectContaining({
+        indexName: 'child_id_index',
+        definition: 'CREATE INDEX child_id_index ON public.child (id)',
+      }),
+    ])
+  })
+
+  it('renames index column references without rewriting a collation identifier', () => {
+    const expectedTables = buildExpectedSchemaFromMigrationSql(`
+      CREATE TABLE public.child (id TEXT);
+      CREATE INDEX child_id_idx ON public.child (id COLLATE "id");
+      ALTER TABLE public.child RENAME COLUMN id TO child_id;
+    `)
+
+    expect(expectedTables.find((table) => table.tableName === 'child')?.indexes).toEqual([
+      expect.objectContaining({
+        definition: 'CREATE INDEX child_id_idx ON public.child (child_id COLLATE "id")',
+      }),
+    ])
+  })
+
+  it('removes a dynamically discovered foreign key before applying its replacement', () => {
+    const expectedTables = buildExpectedSchemaFromMigrationSql(`
+      CREATE TABLE public.schedule_acceleration_recommendations (
+        id UUID PRIMARY KEY,
+        created_by UUID CONSTRAINT schedule_acceleration_recommendations_created_by_fkey
+          REFERENCES public.users(id)
+      );
+      ALTER TABLE public.schedule_acceleration_recommendations
+        RENAME COLUMN created_by TO issued_by;
+
+      DO $$
+      DECLARE
+        constraint_name TEXT;
+      BEGIN
+        SELECT c.conname INTO constraint_name
+          FROM pg_constraint c
+          JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+         WHERE c.conrelid = 'public.schedule_acceleration_recommendations'::regclass
+           AND c.contype = 'f'
+           AND a.attname = 'issued_by'
+         LIMIT 1;
+        IF constraint_name IS NOT NULL THEN
+          EXECUTE format(
+            'ALTER TABLE public.schedule_acceleration_recommendations DROP CONSTRAINT %I',
+            constraint_name
+          );
+        END IF;
+      END $$;
+
+      ALTER TABLE public.schedule_acceleration_recommendations
+        ADD CONSTRAINT schedule_acceleration_recommendations_issued_by_fk
+          FOREIGN KEY (issued_by) REFERENCES public.users(id);
+    `)
+
+    expect(expectedTables[0]?.constraints).toEqual(expect.arrayContaining([
+      expect.objectContaining({ constraintName: 'schedule_acceleration_recommendations_issued_by_fk' }),
+    ]))
+    expect(expectedTables[0]?.constraints).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ constraintName: 'schedule_acceleration_recommendations_created_by_fkey' }),
+    ]))
+  })
+
   it('maps BIGSERIAL columns to PostgreSQL sequence defaults', () => {
     const expectedTables = buildExpectedSchemaFromMigrationSql(`
       CREATE TABLE IF NOT EXISTS public.company_commercial_audit (
