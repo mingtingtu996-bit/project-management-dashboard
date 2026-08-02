@@ -18,6 +18,8 @@ const workflowContractTests = [
   'src/__tests__/durationLearningLegacyRuntimeRetirementVerifier.test.ts',
   'src/__tests__/commercialTriggerRpcAclRemediationService.test.ts',
   'src/__tests__/productionAdvisorAclRemediationWorkflowContract.test.ts',
+  'src/__tests__/securityAdvisorFunctionHardeningService.test.ts',
+  'src/__tests__/advisorFunctionHardeningWorkflowContract.test.ts',
   'src/__tests__/environmentSwitchScript.test.ts',
   'src/__tests__/repositorySecretScanWorkflowContract.test.ts',
   'src/__tests__/pendingMigrationDropTargetGuard.test.ts',

@@ -1,0 +1,135 @@
+name: Advisor Function Hardening 334
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact current main SHA containing migration 334 and this workflow
+        required: true
+        type: string
+      environment:
+        description: Exact database target
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      confirmation:
+        description: Type the environment-specific APPLY_*_ADVISOR_FUNCTION_HARDENING_334 token
+        required: true
+        type: string
+      advisor_warning_confirmation:
+        description: Type EXACT_8_WARNINGS_MATCH_MIGRATION_334 after reviewing the current Advisor rows
+        required: true
+        type: string
+      migration_maintenance_window_confirmed:
+        description: Confirm the target is in a controlled low-traffic migration window
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lighthouse-host-runtime-mutation
+  cancel-in-progress: false
+
+jobs:
+  harden-advisor-functions:
+    name: Apply Exact Advisor Function Hardening 334
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: ${{ inputs.environment == 'staging' && 'staging' || 'Production' }}
+    steps:
+      - name: Checkout exact release
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 0
+
+      - name: Verify protected release authorization
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          DEPLOY_TARGET: ${{ inputs.environment }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          ADVISOR_WARNING_CONFIRMATION: ${{ inputs.advisor_warning_confirmation }}
+          MIGRATION_MAINTENANCE_WINDOW_CONFIRMED: ${{ inputs.migration_maintenance_window_confirmed }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          case "$DEPLOY_TARGET" in
+            staging) expected_confirmation=APPLY_STAGING_ADVISOR_FUNCTION_HARDENING_334 ;;
+            production) expected_confirmation=APPLY_PRODUCTION_ADVISOR_FUNCTION_HARDENING_334 ;;
+            *) exit 1 ;;
+          esac
+          [ "$CONFIRMATION" = "$expected_confirmation" ]
+          [ "$ADVISOR_WARNING_CONFIRMATION" = "EXACT_8_WARNINGS_MATCH_MIGRATION_334" ]
+          [ "$MIGRATION_MAINTENANCE_WINDOW_CONFIRMED" = "true" ]
+          [ "$(git rev-parse HEAD)" = "$RELEASE_SHA" ]
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          [ "$(git rev-parse origin/main)" = "$RELEASE_SHA" ]
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install server dependencies
+        working-directory: server
+        run: npm ci --workspaces=false --no-fund
+
+      - name: Verify exact database target identity
+        working-directory: server
+        env:
+          SUPABASE_URL: ${{ secrets[format('{0}_SUPABASE_URL', inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          SUPABASE_MIGRATION_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+        run: npm run verify:security-advisor-function-hardening-target
+
+      - name: Resolve exact remediation state
+        id: remediation-state
+        working-directory: server
+        env:
+          DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+        run: |
+          set -euo pipefail
+          if npm run verify:security-advisor-function-hardening -- --expect hardened; then
+            echo "apply_required=false" >> "$GITHUB_OUTPUT"
+          else
+            npm run verify:security-advisor-function-hardening -- --expect pending
+            echo "apply_required=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify migration 334 is the exact selectable pending migration
+        working-directory: server
+        env:
+          DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+        run: npm run migrate:plan -- --only=334_security_advisor_function_hardening.sql
+
+      - name: Apply migration 334 only
+        if: steps.remediation-state.outputs.apply_required == 'true'
+        working-directory: server
+        env:
+          DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+        run: npm run migrate:pending -- --only=334_security_advisor_function_hardening.sql
+
+      - name: Verify hardened function readback
+        working-directory: server
+        env:
+          DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+        run: npm run verify:security-advisor-function-hardening -- --expect hardened
+
+      - name: Report next release phase
+        working-directory: server
+        env:
+          DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+        run: |
+          set -euo pipefail
+          npm run migrate:plan | tee -a "$GITHUB_STEP_SUMMARY"
+          {
+            echo ""
+            echo "Migration 334 function readback passed. Rerun the target Supabase Advisor and refresh the environment Advisor export before the normal deployment workflow."
+            echo "No application, host, ingress, or container mutation was performed by this workflow."
+          } >> "$GITHUB_STEP_SUMMARY"

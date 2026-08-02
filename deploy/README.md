@@ -92,6 +92,32 @@ it passes, refresh the Production Supabase Advisor export and require
 zero security issues before using the normal deployment workflow. Do not reuse this
 path for later migrations or bypass the normal Advisor gate.
 
+## Advisor Function Hardening 334
+
+Migration 334 has a database-only bootstrap workflow because its two mutable
+function search paths and six effective anon/authenticated execute exposures are
+the exact eight staging Advisor warnings that prevent the normal zero-issue
+preflight. Dispatch `.github/workflows/advisor-function-hardening-334.yml` only
+from the exact current protected `main` SHA. Select `staging` or `production`,
+confirm a controlled low-traffic migration window, enter
+`EXACT_8_WARNINGS_MATCH_MIGRATION_334`, and use the matching environment token:
+
+- `APPLY_STAGING_ADVISOR_FUNCTION_HARDENING_334`
+- `APPLY_PRODUCTION_ADVISOR_FUNCTION_HARDENING_334`
+
+The workflow verifies that the public Supabase URL and privileged migration URL
+resolve to the same target project. It accepts only the exact pending catalog
+state or the exact hardened retry state, selects and applies only
+`334_security_advisor_function_hardening.sql`, and then reads back the migration
+ledger, both fixed `search_path` values, all closed PUBLIC/anon/authenticated
+execute paths, and the retained `service_role` and `workbuddy_runtime` grants.
+It performs no SSH, container, ingress, or application deployment operation.
+
+After the workflow passes, rerun the matching Supabase Advisor, capture a fresh
+Dashboard UI or Management API export with zero security issues, update the
+protected environment Advisor secret, and only then run the normal same-SHA
+deployment workflow. Staging must complete before the production token is used.
+
 ## Production runtime recovery
 
 `.github/workflows/production-runtime-recovery.yml` is a manual, protected

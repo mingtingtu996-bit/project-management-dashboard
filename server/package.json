@@ -51,6 +51,8 @@
     "migrate:plan": "tsx -r dotenv/config src/scripts/run-pending-migrations.ts --plan",
     "verify:commercial-trigger-rpc-target": "tsx -r dotenv/config src/scripts/verify-commercial-trigger-rpc-target.ts",
     "verify:commercial-trigger-rpc-acl": "tsx -r dotenv/config src/scripts/verify-commercial-trigger-rpc-acl.ts",
+    "verify:security-advisor-function-hardening-target": "tsx -r dotenv/config src/scripts/verify-security-advisor-function-hardening-target.ts",
+    "verify:security-advisor-function-hardening": "tsx -r dotenv/config src/scripts/verify-security-advisor-function-hardening.ts",
     "migrate:duration-learning-legacy-runtime-retirement": "tsx -r dotenv/config src/scripts/run-pending-migrations.ts --only=322 --duration-learning-legacy-runtime-retirement",
     "verify:duration-learning-legacy-runtime-retirement": "tsx -r dotenv/config src/scripts/verify-duration-learning-legacy-runtime-retirement.ts",
     "migrate:check": "tsx -r dotenv/config src/scripts/check-migration-safety.ts",
