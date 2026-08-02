@@ -1016,6 +1016,7 @@ function normalizeViewDefinition(value: string) {
     .split(/\bunion\s+all\b/)
     .map((branch) => normalizeSingleSourceViewBranch(branch.trim()))
     .join(' union all ')
+    .replace(/\s+\)/g, ')')
 }
 
 function normalizeSingleSourceViewBranch(branch: string) {
