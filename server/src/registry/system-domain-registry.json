@@ -3342,6 +3342,13 @@
     },
     {
       "kind": "migration",
+      "id": "334_security_advisor_function_hardening",
+      "architectureUnit": "底座：平台运行观测",
+      "runtimeScope": "platform_foundation",
+      "assignmentReason": "fixes function search paths and restricts security-definer RPC execution privileges"
+    },
+    {
+      "kind": "migration",
       "id": "CLEAN_MIGRATION",
       "architectureUnit": "底座：平台运行观测",
       "runtimeScope": "platform_foundation",

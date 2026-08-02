@@ -91,6 +91,7 @@ vi.mock('../services/upgradeChainService.js', () => ({
 import {
   confirmWarningAsRisk,
   convertRiskToIssue,
+  ensureIssueFromObstacle,
   ensureIssueFromExpiredAcceptance,
   ensureIssueFromExpiredCondition,
   markSourceResolved,
@@ -375,6 +376,29 @@ describe('risk/issue/warning governance service hardening', () => {
 
     expect(mocks.confirmWarningAsRiskOnChain).toHaveBeenCalledWith('project-1', 'warning-1', 'user-1')
     expect(mocks.convertRiskToIssueAtomic).toHaveBeenCalledWith('risk-1', 'risk_converted')
+  })
+
+  it('routes obstacle escalation through the transactional issue writer', async () => {
+    await expect(ensureIssueFromObstacle({
+      id: 'obstacle-1',
+      project_id: 'project-1',
+      task_id: 'task-1',
+      title: 'Blocked access',
+      description: 'Access is blocked.',
+      severity: 'critical',
+    })).resolves.toBe('issue-from-condition')
+
+    expect(mocks.createIssue).toHaveBeenCalledWith(expect.objectContaining({
+      project_id: 'project-1',
+      task_id: 'task-1',
+      source_type: 'obstacle_escalated',
+      source_entity_type: 'task_obstacle',
+      source_entity_id: 'obstacle-1',
+      priority: 10,
+    }))
+    expect(mocks.queryLog).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ table: 'issues', method: 'insert' }),
+    ]))
   })
 
   it('resolves warnings by both raw source id and source hash so old signatures do not strand lifecycle records', async () => {
