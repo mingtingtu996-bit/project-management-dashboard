@@ -4584,6 +4584,13 @@
     },
     {
       "kind": "service",
+      "id": "securityAdvisorFunctionHardeningService",
+      "architectureUnit": "底座：平台运行观测",
+      "runtimeScope": "platform_foundation",
+      "assignmentReason": "verifies the exact staging or production Supabase target, migration 334 ledger phase, function search_path, and SECURITY DEFINER ACL readback for the protected database-only remediation"
+    },
+    {
+      "kind": "service",
       "id": "companySummaryService",
       "architectureUnit": "主执行环：描述分析",
       "runtimeScope": "business_core",
