@@ -200,6 +200,22 @@ function projectIdForTask(taskId: string) {
   return String(state.tasks.find((task) => task.id === taskId)?.project_id ?? 'project-1')
 }
 
+function executionFactsForTask(task: Record<string, unknown>) {
+  const taskId = String(task.id ?? '')
+  const dateValue = (value: unknown) => value == null || value === '' ? null : String(value).slice(0, 10)
+  return [
+    { entityId: taskId, entityType: 'task', factType: 'task.actual_start_date', value: dateValue(task.actual_start_date) },
+    { entityId: taskId, entityType: 'task', factType: 'task.actual_end_date', value: dateValue(task.actual_end_date) },
+    {
+      entityId: taskId,
+      entityType: 'task',
+      factType: 'task.progress',
+      value: Number.isFinite(Number(task.progress)) ? Number(task.progress) : 0,
+    },
+    { entityId: taskId, entityType: 'task', factType: 'task.status', value: String(task.status ?? 'todo') },
+  ]
+}
+
 function forecastTaskDuration(
   taskId: string,
   options: NonNullable<Parameters<typeof forecastTaskDurationWithScope>[1]> = {},
@@ -317,7 +333,11 @@ describe('taskDurationForecastService', () => {
       writesSeedRuntimeDirectly: false,
     })
     mocks.readPlanningReplayCalibrationReadback.mockResolvedValue(null)
-    mocks.listCurrentExecutionFacts.mockResolvedValue([])
+    mocks.listCurrentExecutionFacts.mockImplementation(async (input: { entityIds: string[] }) => (
+      state.tasks
+        .filter((task) => input.entityIds.includes(String(task.id ?? '')))
+        .flatMap(executionFactsForTask)
+    ))
   })
 
   it('rejects a task that is outside the explicit project scope', async () => {
@@ -1599,6 +1619,12 @@ describe('taskDurationForecastService', () => {
       {
         entityId: 'task-execution-fact-authority',
         entityType: 'task',
+        factType: 'task.actual_end_date',
+        value: null,
+      },
+      {
+        entityId: 'task-execution-fact-authority',
+        entityType: 'task',
         factType: 'task.progress',
         value: 60,
       },
@@ -1630,6 +1656,39 @@ describe('taskDurationForecastService', () => {
         progressCompletionRatio: 0.6,
       }),
     }))
+  })
+
+  it('fails closed instead of forecasting from stale completed compatibility columns when execution facts are missing', async () => {
+    state.tasks = [{
+      id: 'task-execution-fact-missing',
+      project_id: 'project-1',
+      title: 'Stale completed task',
+      planned_start_date: '2026-05-01',
+      planned_end_date: '2026-05-20',
+      actual_start_date: '2026-05-02',
+      actual_end_date: '2026-05-18',
+      progress: 100,
+      status: 'completed',
+    }]
+    mocks.listCurrentExecutionFacts.mockResolvedValue([])
+
+    const forecast = await forecastTaskDuration('task-execution-fact-missing')
+
+    expect(forecast).toMatchObject({
+      remainingDurationDays: null,
+      remainingForecastDays: null,
+      forecastFinishDate: null,
+      forecastDelayDays: null,
+      confidenceLevel: 'unavailable',
+      forecastSource: 'execution_fact_authority_unavailable',
+    })
+    expect(forecast.remainingDuration).toEqual(expect.objectContaining({
+      value: null,
+      availability: 'unavailable',
+      unavailableReason: 'task_execution_fact_authority_incomplete',
+    }))
+    expect(mocks.getTaskDurationSuggestion).not.toHaveBeenCalled()
+    expect(state.insertedForecasts).toEqual([])
   })
 
   it('passes the one exact confirmed canonical task primary into the duration suggestion caller', async () => {
@@ -2765,8 +2824,15 @@ describe('taskDurationForecastService', () => {
       },
     }]
     mocks.listCurrentExecutionFacts.mockImplementation(async (input: { entityIds: string[] }) => (
-      input.entityIds.includes('task-authority-parent')
-        ? [
+      input.entityIds.flatMap((entityId) => {
+        if (entityId === 'task-authority-parent') {
+          return [
+            {
+              entityId: 'task-authority-parent',
+              entityType: 'task',
+              factType: 'task.actual_start_date',
+              value: null,
+            },
             {
               entityId: 'task-authority-parent',
               entityType: 'task',
@@ -2786,7 +2852,10 @@ describe('taskDurationForecastService', () => {
               value: 'in_progress',
             },
           ]
-        : []
+        }
+        const task = state.tasks.find((candidate) => candidate.id === entityId)
+        return task ? executionFactsForTask(task) : []
+      })
     ))
 
     const forecast = await forecastTaskDuration('task-authority-child')

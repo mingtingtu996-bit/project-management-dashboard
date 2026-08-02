@@ -110,10 +110,12 @@ describe('task-summary production delay semantics', () => {
 
   it('delegates period and daily metrics to the task-summary service without fake progress fallback', () => {
     const source = readFileSync(resolve(serverRoot, 'src/routes/task-summaries.ts'), 'utf8')
+    const dailyServiceSource = readFileSync(resolve(serverRoot, 'src/services/taskSummaryDailyProgressService.ts'), 'utf8')
     const compareAndDailySource = source.slice(source.indexOf("router.get('/projects/:id/task-summary/compare'"))
 
     expect(compareAndDailySource).toContain('buildTaskSummaryCompareResults({')
-    expect(compareAndDailySource).toContain('buildDailyTaskProgressSummary({')
+    expect(compareAndDailySource).toContain('getDailyTaskProgressReadModel({')
+    expect(dailyServiceSource).toContain('buildDailyTaskProgressSummary({')
     expect(compareAndDailySource).not.toContain('currentProgress - 10')
     expect(compareAndDailySource).not.toContain('falling back to tasks table')
     expect(compareAndDailySource).not.toContain('route-level-aggregation-approved')
@@ -121,15 +123,34 @@ describe('task-summary production delay semantics', () => {
 
   it('uses project business-day boundaries for daily progress queries', () => {
     const source = readFileSync(resolve(serverRoot, 'src/routes/task-summaries.ts'), 'utf8')
+    const dailyServiceSource = readFileSync(resolve(serverRoot, 'src/services/taskSummaryDailyProgressService.ts'), 'utf8')
     const dailySource = source.slice(source.indexOf("router.get('/projects/:id/daily-progress'"))
 
     expect(dailySource).toContain('resolveConstructionCalendarContext({ projectId })')
     expect(dailySource).toContain('resolveDailyTaskProgressWindow({')
-    expect(dailySource).toContain(".gte('updated_at', dayStartInclusive)")
-    expect(dailySource).toContain(".lt('updated_at', dayEndExclusive)")
+    expect(dailySource).toContain('dayStartInclusive,')
+    expect(dailySource).toContain('dayEndExclusive,')
+    expect(dailyServiceSource).toContain(".gte('updated_at', input.dayStartInclusive)")
+    expect(dailyServiceSource).toContain(".lt('updated_at', input.dayEndExclusive)")
     expect(dailySource).not.toContain("new Date().toISOString().slice(0, 10)")
     expect(dailySource).not.toContain('`${targetDate} 00:00:00`')
     expect(dailySource).not.toContain('`${targetDate} 23:59:59`')
+  })
+
+  it('delegates the daily-progress query and read-model assembly to one service call', () => {
+    const routeSource = readFileSync(resolve(serverRoot, 'src/routes/task-summaries.ts'), 'utf8')
+    const dailySource = routeSource.slice(routeSource.indexOf("router.get('/projects/:id/daily-progress'"))
+
+    expect(dailySource).toContain('getDailyTaskProgressReadModel({')
+    expect(dailySource).not.toContain(".from('tasks')")
+    expect(dailySource).not.toContain(".from('task_progress_snapshots')")
+    expect(dailySource).not.toContain(".from('project_daily_snapshot')")
+    expect(dailySource).not.toContain('new Map')
+    expect(dailySource).not.toContain('loadParticipantUnitNameMap(')
+    expect(dailySource).not.toContain('getTaskSummaryProjectMemberNameMap(')
+    expect(dailySource).not.toContain('buildDailyTaskProgressSummary({')
+    const serviceSource = readFileSync(resolve(serverRoot, 'src/services/taskSummaryDailyProgressService.ts'), 'utf8')
+    expect(serviceSource).toContain('export async function getDailyTaskProgressReadModel(')
   })
 
   it('delegates trend, assignee, and monthly-plan aggregation to the project summary authority', () => {

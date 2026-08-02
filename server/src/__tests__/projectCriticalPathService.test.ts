@@ -221,7 +221,7 @@ const mocks = vi.hoisted(() => {
     recordDurationAccuracyPrediction: vi.fn(),
     recordDurationAccuracyBacktest: vi.fn(),
     backtestEarliestPendingDurationAccuracyPrediction: vi.fn(),
-    listCurrentExecutionFacts: vi.fn(async () => []),
+    listCurrentExecutionFacts: vi.fn(async (_input?: { entityIds: string[] }) => []),
     listCurrentTaskDurationForecasts: vi.fn(),
     resolveConstructionCalendarContext: vi.fn(),
     readLiveProjectGenerationFacts: vi.fn(),
@@ -295,6 +295,17 @@ function useAuthoritativeConstructionCalendar() {
   })
 }
 
+function executionFactsForCriticalPathTask(task: Row) {
+  const dateValue = (value: unknown) => value == null || value === '' ? null : String(value).slice(0, 10)
+  return [
+    { entityType: 'task', entityId: task.id, factType: 'task.actual_start_date', value: dateValue(task.actual_start_date) },
+    { entityType: 'task', entityId: task.id, factType: 'task.actual_end_date', value: dateValue(task.actual_end_date) },
+    { entityType: 'task', entityId: task.id, factType: 'task.first_progress_at', value: task.first_progress_at ?? null },
+    { entityType: 'task', entityId: task.id, factType: 'task.progress', value: Number(task.progress ?? 0) },
+    { entityType: 'task', entityId: task.id, factType: 'task.status', value: String(task.status ?? 'todo') },
+  ]
+}
+
 describe('project critical path service', () => {
   beforeEach(() => {
     clearProjectCriticalPathSnapshotCache()
@@ -350,7 +361,11 @@ describe('project critical path service', () => {
     mocks.recordDurationAccuracyPrediction.mockResolvedValue(null)
     mocks.recordDurationAccuracyBacktest.mockResolvedValue(null)
     mocks.backtestEarliestPendingDurationAccuracyPrediction.mockResolvedValue(null)
-    mocks.listCurrentExecutionFacts.mockResolvedValue([])
+    mocks.listCurrentExecutionFacts.mockImplementation(async (input: { entityIds: string[] }) => (
+      mocks.tables.tasks
+        .filter((task) => input.entityIds.includes(String(task.id ?? '')))
+        .flatMap(executionFactsForCriticalPathTask)
+    ))
     mocks.listCurrentTaskDurationForecasts.mockResolvedValue([])
     mocks.resolveConstructionCalendarContext.mockResolvedValue({ basis: 'calendar_day', windows: [] })
     mocks.readLiveProjectGenerationFacts.mockResolvedValue({})
@@ -422,12 +437,19 @@ describe('project critical path service', () => {
       actual_start_date: row.id === 'task-b' ? null : row.start_date,
       actual_end_date: row.id === 'task-b' ? null : row.end_date,
     }))
-    mocks.listCurrentExecutionFacts.mockResolvedValue([
-      { entityType: 'task', entityId: 'task-b', factType: 'task.status', value: 'completed' },
-      { entityType: 'task', entityId: 'task-b', factType: 'task.progress', value: 100 },
-      { entityType: 'task', entityId: 'task-b', factType: 'task.actual_start_date', value: '2026-04-01' },
-      { entityType: 'task', entityId: 'task-b', factType: 'task.actual_end_date', value: '2026-04-08' },
-    ])
+    mocks.listCurrentExecutionFacts.mockResolvedValue(
+      mocks.tables.tasks.flatMap((task) => executionFactsForCriticalPathTask(
+        task.id === 'task-b'
+          ? {
+              ...task,
+              status: 'completed',
+              progress: 100,
+              actual_start_date: '2026-04-01',
+              actual_end_date: '2026-04-08',
+            }
+          : task,
+      )),
+    )
 
     await recalculateProjectCriticalPath('project-1')
 
@@ -449,6 +471,53 @@ describe('project critical path service', () => {
       actualFinishDate: '2026-04-08',
       actualDurationDays: 8,
     }))
+  })
+
+  it('does not publish CPM outcomes from stale completed compatibility columns when execution facts are missing', async () => {
+    useAuthoritativeConstructionCalendar()
+    mocks.tables.tasks = mocks.tables.tasks.map((row) => ({
+      ...row,
+      status: 'completed',
+      progress: 100,
+      actual_start_date: row.start_date,
+      actual_end_date: row.end_date,
+    }))
+    mocks.listCurrentExecutionFacts.mockResolvedValue([])
+
+    await recalculateProjectCriticalPath('project-1')
+
+    expect(mocks.recordDurationAccuracyBacktest).not.toHaveBeenCalled()
+    expect(mocks.backtestEarliestPendingDurationAccuracyPrediction).not.toHaveBeenCalled()
+    expect(mocks.rawQuery.mock.calls.some((call) => (
+      String(call[0]).toLowerCase().includes('insert into public.duration_plan_network_outcomes')
+    ))).toBe(false)
+  })
+
+  it('does not publish CPM outcomes when one required execution fact is missing', async () => {
+    useAuthoritativeConstructionCalendar()
+    mocks.tables.tasks = mocks.tables.tasks.map((row) => ({
+      ...row,
+      status: 'completed',
+      progress: 100,
+      actual_start_date: row.start_date,
+      actual_end_date: row.end_date,
+    }))
+    mocks.listCurrentExecutionFacts.mockResolvedValue(
+      mocks.tables.tasks
+        .flatMap(executionFactsForCriticalPathTask)
+        .filter((fact) => !(
+          fact.entityId === 'task-b'
+          && fact.factType === 'task.first_progress_at'
+        )),
+    )
+
+    await recalculateProjectCriticalPath('project-1')
+
+    expect(mocks.recordDurationAccuracyBacktest).not.toHaveBeenCalled()
+    expect(mocks.backtestEarliestPendingDurationAccuracyPrediction).not.toHaveBeenCalled()
+    expect(mocks.rawQuery.mock.calls.some((call) => (
+      String(call[0]).toLowerCase().includes('insert into public.duration_plan_network_outcomes')
+    ))).toBe(false)
   })
 
   it('uses a published critical-path rule as a watched-task prior without rewriting CPM facts', async () => {
