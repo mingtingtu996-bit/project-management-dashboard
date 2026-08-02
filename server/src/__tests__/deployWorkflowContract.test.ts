@@ -907,6 +907,7 @@ describe('deploy workflow contract', () => {
       'src/__tests__/v14231NonLiveCloseoutContract.test.ts',
       'src/__tests__/migrationEntryPoints.test.ts',
       'src/__tests__/runtime-schema-reconciliation.test.ts',
+      'src/__tests__/securityAdvisorFunctionHardeningMigration.test.ts',
       'src/__tests__/v14231CloakBrowserRouteSmokeScript.test.ts',
       'src/__tests__/migrationSafetyGateService.test.ts',
       'src/__tests__/migrationProductionGovernanceService.test.ts',

@@ -1,4 +1,4 @@
--- CANONICAL: current clean bootstrap bundle, synchronized through migration 333
+-- CANONICAL: current clean bootstrap bundle, synchronized through migration 334
 -- CLEAN MIGRATION (UTF-8, no encoding issues)
 -- Generated: 2026-03-26 02:39
 -- All 17 migration files merged
@@ -23656,6 +23656,42 @@ WHERE NOT EXISTS (
   FROM public.execution_fact_events successor
   WHERE successor.supersedes_event_id = event.id
 );
+
+NOTIFY pgrst, 'reload schema';
+
+COMMIT;
+
+-- ============================================================
+-- Source: 334_security_advisor_function_hardening.sql
+-- ============================================================
+-- Harden functions exposed by the staging migration chain against Advisor findings.
+
+BEGIN;
+
+ALTER FUNCTION public.ensure_structured_cause_attribution_tenant()
+  SET search_path = public;
+ALTER FUNCTION public.validate_risk_issue_closure_cause_attribution()
+  SET search_path = public;
+
+REVOKE EXECUTE ON FUNCTION public.archive_duration_learning_runtime_evidence_outbox_tombstone()
+  FROM anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.cancel_duration_learning_runtime_evidence_before_subject_delete()
+  FROM anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.persist_duration_learning_runtime_consumptions(JSONB)
+  FROM anon, authenticated;
+
+REVOKE ALL ON FUNCTION public.archive_duration_learning_runtime_evidence_outbox_tombstone()
+  FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.archive_duration_learning_runtime_evidence_outbox_tombstone()
+  TO workbuddy_runtime, service_role;
+REVOKE ALL ON FUNCTION public.cancel_duration_learning_runtime_evidence_before_subject_delete()
+  FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.cancel_duration_learning_runtime_evidence_before_subject_delete()
+  TO workbuddy_runtime, service_role;
+REVOKE ALL ON FUNCTION public.persist_duration_learning_runtime_consumptions(JSONB)
+  FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.persist_duration_learning_runtime_consumptions(JSONB)
+  TO workbuddy_runtime, service_role;
 
 NOTIFY pgrst, 'reload schema';
 

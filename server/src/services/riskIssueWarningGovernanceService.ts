@@ -362,60 +362,6 @@ export async function confirmWarningAsRisk(
 ): Promise<string | null> {
   const risk = await confirmWarningAsRiskOnUpgradeChain(projectId, warningId, userId)
   return risk?.id ?? null
-
-  /*
-  const now = new Date().toISOString()
-
-  // Fetch warning notification
-  const { data: warning } = await (supabase as any)
-    .from('notifications')
-    .select('*')
-    .eq('id', warningId)
-    .eq('source_entity_type', 'warning')
-    .single() as any
-
-  if (!warning || warning.is_escalated) return null
-
-  // Create risk
-  const riskId = randomUUID()
-  const { error: riskError } = await (supabase as any)
-    .from('risks')
-    .insert({
-      id: riskId,
-      project_id: warning.project_id,
-      title: warning.title ?? warning.message ?? '预警升级风险',
-      description: warning.message ?? '',
-      level: warning.severity === 'critical' ? 'high' : 'medium',
-      status: 'identified',
-      source_type: 'warning_converted',
-      source_id: warningId,
-      source_entity_type: 'warning',
-      source_entity_id: warning.source_entity_id,
-      chain_id: warning.chain_id ?? randomUUID(),
-      created_at: now,
-      updated_at: now,
-    })
-
-  if (riskError) {
-    logger.error('Failed to create risk from warning', { error: riskError, warningId })
-    return null
-  }
-
-  // Mark warning as escalated
-  await (supabase as any)
-    .from('notifications')
-    .update({
-      warning_lifecycle_status: 'escalated',
-      escalated_to_risk_id: riskId,
-      escalated_at: now,
-      is_escalated: true,
-      updated_at: now,
-    })
-    .eq('id', warningId)
-    .eq('project_id', warning.project_id)
-
-  return riskId
-  */
 }
 
 // ============================================================
@@ -462,56 +408,6 @@ export async function convertRiskToIssue(
 ): Promise<string | null> {
   const issue = await convertRiskToIssueAtomic(riskId, 'risk_converted')
   return issue?.id ?? null
-
-  /*
-  const now = new Date().toISOString()
-
-  const { data: risk } = await (supabase as any)
-    .from('risks')
-    .select('*')
-    .eq('id', riskId)
-    .single() as any
-
-  if (!risk || risk.linked_issue_id) return null
-
-  const issueId = randomUUID()
-  const { error: issueError } = await (supabase as any)
-    .from('issues')
-    .insert({
-      id: issueId,
-      project_id: risk.project_id,
-      title: risk.title ?? '风险转入问题',
-      description: risk.description ?? '',
-      severity: risk.level === 'critical' ? 'critical' : risk.level === 'high' ? 'high' : 'medium',
-      status: 'open',
-      source_type: 'risk_converted',
-      source_id: riskId,
-      source_entity_type: 'risk',
-      source_entity_id: risk.source_entity_id,
-      chain_id: risk.chain_id ?? randomUUID(),
-      priority: risk.level === 'high' || risk.level === 'critical' ? 'high' : 'medium',
-      created_at: now,
-      updated_at: now,
-    })
-
-  if (issueError) {
-    logger.error('Failed to create issue from risk', { error: issueError, riskId })
-    return null
-  }
-
-  // Link risk to issue
-  await (supabase as any)
-    .from('risks')
-    .update({
-      linked_issue_id: issueId,
-      status: 'mitigating',
-      updated_at: now,
-    })
-    .eq('id', riskId)
-    .eq('project_id', risk.project_id)
-
-  return issueId
-  */
 }
 
 export async function autoEscalateRisksToIssues(projectId?: string): Promise<number> {
@@ -563,15 +459,12 @@ export async function ensureIssueFromObstacle(obstacle: Record<string, unknown>)
 
   if (existing) return existing.id
 
-  const now = new Date().toISOString()
-  const issueId = randomUUID()
   const severity = obstacle.severity === 'critical' || obstacle.severity === '严重' ? 'critical' : 'medium'
 
-  const { error } = await (supabase as any)
-    .from('issues')
-    .insert({
-      id: issueId,
-      project_id: obstacle.project_id,
+  try {
+    const created = await dbCreateIssue({
+      project_id: projectId,
+      task_id: String(obstacle.task_id ?? '').trim() || null,
       title: `阻碍上卷：${obstacle.title ?? obstacle.description ?? '未命名阻碍'}`,
       description: String(obstacle.description ?? ''),
       severity,
@@ -581,16 +474,18 @@ export async function ensureIssueFromObstacle(obstacle: Record<string, unknown>)
       source_entity_type: 'task_obstacle',
       source_entity_id: obstacleId,
       chain_id: randomUUID(),
-      priority: severity === 'critical' ? 'high' : 'medium',
-      created_at: now,
-      updated_at: now,
+      priority: severity === 'critical' ? 10 : 30,
+      pending_manual_close: false,
+      closed_reason: null,
+      closed_at: null,
+      version: 1,
     })
 
-  if (error) {
+    return created.id
+  } catch (error) {
     logger.error('Failed to create issue from obstacle', { error, obstacleId })
     return null
   }
-  return issueId
 }
 
 // ============================================================
