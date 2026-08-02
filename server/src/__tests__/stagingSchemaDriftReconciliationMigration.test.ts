@@ -63,11 +63,19 @@ describe('staging schema drift reconciliation migration', () => {
       '-- ============================================================',
     ].join('\n')
     const sourceIndex = clean.indexOf(sourceHeader)
+    const sourceBodyStart = sourceIndex + sourceHeader.length
+    const nextSourceIndex = clean.indexOf(
+      '\n-- ============================================================\n-- Source:',
+      sourceBodyStart,
+    )
+    const bundledSource = clean
+      .slice(sourceBodyStart, nextSourceIndex >= 0 ? nextSourceIndex : undefined)
+      .trim()
 
     expect(rollback).toContain('DROP INDEX IF EXISTS public.uq_projects_id_company_id_for_duration_benchmarks')
     expect(rollback).toContain('CREATE OR REPLACE VIEW public.current_execution_facts')
     expect(rollback).toContain('SELECT event.*')
     expect(sourceIndex).toBeGreaterThanOrEqual(0)
-    expect(clean.slice(sourceIndex + sourceHeader.length).trim()).toBe(forward)
+    expect(bundledSource).toBe(forward)
   })
 })

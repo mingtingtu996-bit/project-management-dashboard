@@ -41,6 +41,14 @@ describe('security advisor function hardening migration', () => {
       '-- ============================================================',
     ].join('\n')
     const sourceIndex = clean.indexOf(header)
+    const sourceBodyStart = sourceIndex + header.length
+    const nextSourceIndex = clean.indexOf(
+      '\n-- ============================================================\n-- Source:',
+      sourceBodyStart,
+    )
+    const bundledSource = clean
+      .slice(sourceBodyStart, nextSourceIndex >= 0 ? nextSourceIndex : undefined)
+      .trim()
 
     expect(rollback).toMatch(/ALTER FUNCTION public\.ensure_structured_cause_attribution_tenant\(\)\s+RESET search_path/)
     expect(rollback).toMatch(/ALTER FUNCTION public\.validate_risk_issue_closure_cause_attribution\(\)\s+RESET search_path/)
@@ -49,6 +57,6 @@ describe('security advisor function hardening migration', () => {
     expect(rollback).toMatch(/REVOKE ALL ON FUNCTION public\.persist_duration_learning_runtime_consumptions\(JSONB\)\s+FROM PUBLIC/)
     expect(rollback).toMatch(/GRANT EXECUTE ON FUNCTION public\.persist_duration_learning_runtime_consumptions\(JSONB\)\s+TO workbuddy_runtime, service_role/)
     expect(sourceIndex).toBeGreaterThanOrEqual(0)
-    expect(clean.slice(sourceIndex + header.length).trim()).toBe(sql.trim())
+    expect(bundledSource).toBe(sql.trim())
   })
 })
