@@ -39,14 +39,20 @@ describe('runtime schema reconciliation', () => {
   it('keeps audit logger and progress deviation runtime code aligned with the reconciled schema', () => {
     const auditLoggerSource = readServerFile('src', 'middleware', 'auditLogger.ts')
     const progressDeviationSource = readServerFile('src', 'services', 'progressDeviationService.ts')
-    const taskSummarySource = readServerFile('src', 'routes', 'task-summaries.ts')
+    const taskSummaryRouteSource = readServerFile('src', 'routes', 'task-summaries.ts')
+    const taskSummaryDailyProgressSource = readServerFile(
+      'src',
+      'services',
+      'taskSummaryDailyProgressService.ts',
+    )
     const projectExecutionSummarySource = readServerFile('src', 'services', 'projectExecutionSummaryService.ts')
 
     expect(auditLoggerSource).toContain('INSERT INTO public.operation_logs')
     expect(progressDeviationSource).toContain("fetchRowsIn<TaskProgressSnapshot>(")
     expect(progressDeviationSource).toContain("'task_progress_snapshots'")
     expect(progressDeviationSource).not.toContain("fetchRows<TaskProgressSnapshot>('task_progress_snapshots', [['project_id', projectId]])")
-    expect(taskSummarySource).toContain(".in('task_id', projectTaskIds)")
+    expect(taskSummaryRouteSource).toContain('getDailyTaskProgressReadModel({')
+    expect(taskSummaryDailyProgressSource).toContain(".in('task_id', projectTaskIds)")
     expect(projectExecutionSummarySource).toContain('loadPlanningGovernanceStates(')
   })
 
