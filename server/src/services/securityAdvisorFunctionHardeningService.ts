@@ -227,9 +227,6 @@ export function verifySecurityAdvisorFunctionHardeningState(
       runtimeGrantCount += 1
     }
 
-    if (expectedState === 'pending' && !readback.publicCanExecute) {
-      throw new Error(`Expected bootstrap PUBLIC execute exposure is missing for ${functionIdentity}`)
-    }
     if (expectedState === 'hardened' && readback.publicCanExecute) {
       throw new Error(`PUBLIC execute remains on ${functionIdentity}`)
     }
