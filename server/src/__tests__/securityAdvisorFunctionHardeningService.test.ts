@@ -36,7 +36,7 @@ function buildReadbacks(state: 'pending' | 'hardened'): FunctionReadback[] {
     functionIdentity,
     functionExists: true,
     searchPathIsPublic: false,
-    publicCanExecute: state === 'pending',
+    publicCanExecute: false,
     roles: {
       anon: { exists: true, canExecute: state === 'pending', hasExplicitExecuteGrant: false },
       authenticated: { exists: true, canExecute: state === 'pending', hasExplicitExecuteGrant: false },
@@ -123,6 +123,16 @@ describe('security Advisor function hardening service', () => {
       partialAcl,
       'pending',
     )).toThrow(/exactly six anon\/authenticated exposures/i)
+
+    const publicAclAbsent = buildReadbacks('pending')
+    expect(publicAclAbsent[2].publicCanExecute).toBe(false)
+    expect(subject.verifySecurityAdvisorFunctionHardeningState(
+      publicAclAbsent,
+      'pending',
+    )).toMatchObject({
+      state: 'pending',
+      advisorExecuteExposureCount: 6,
+    })
   })
 
   it('requires hardened search paths, closed API exposure, and retained runtime grants', () => {
