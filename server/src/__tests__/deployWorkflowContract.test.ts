@@ -1626,6 +1626,17 @@ describe('mainline production workflow integration', () => {
     expect(clientDockerfile).not.toContain('FROM node:20')
   })
 
+  it('packages server governance modules before Docker compilation', () => {
+    const serverDockerfile = readFileSync(resolve(workspaceRoot, 'server', 'Dockerfile'), 'utf8')
+    const copySourceIndex = serverDockerfile.indexOf('COPY src ./src')
+    const copyScriptsIndex = serverDockerfile.indexOf('COPY scripts ./scripts')
+    const buildIndex = serverDockerfile.indexOf('RUN npm run build')
+
+    expect(copySourceIndex).toBeGreaterThanOrEqual(0)
+    expect(copyScriptsIndex).toBeGreaterThan(copySourceIndex)
+    expect(buildIndex).toBeGreaterThan(copyScriptsIndex)
+  })
+
   it('repairs only recognized Docker builder cache corruption before deploy', () => {
     const script = readFileSync(resolve(workspaceRoot, 'scripts', 'deploy-lighthouse-server.sh'), 'utf8')
 
