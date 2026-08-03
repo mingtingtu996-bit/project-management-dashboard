@@ -600,6 +600,7 @@ if (process.env.NODE_ENV !== 'test') {
     let leadershipLoss: Error | null = null
     let shutdownRuntime: ((signal: string) => Promise<void>) | null = null
     if (shouldBootScheduler && productionMigrationRuntimeGate.allowScheduler) {
+      const schedulerStartedAt = new Date()
       schedulerModule = await import('./scheduler.js')
       const schedulerStarted = await schedulerModule.startAllJobs({
         ownerId: `${process.env.HOSTNAME ?? 'workbuddy'}-${process.pid}`,
@@ -610,7 +611,7 @@ if (process.env.NODE_ENV !== 'test') {
           if (shutdownRuntime) void shutdownRuntime('scheduler_leadership_lost')
         },
       })
-      markRuntimeSchedulerReady(schedulerStarted)
+      markRuntimeSchedulerReady(schedulerStarted, schedulerStartedAt)
       if (!schedulerStarted) {
         throw new Error('Scheduler leadership was not acquired by the configured worker runtime')
       }
