@@ -187,6 +187,7 @@ export function getPersistentScheduledJobNames() {
 type PersistentJobScheduleHealthOptions = {
   jobNames?: string[]
   staleAfterMs?: number
+  notBefore?: Date
   queryExec?: typeof query
   catchUpStatus?: ReturnType<PersistentJobCatchUpCoordinator['getStatus']>
 }
@@ -215,12 +216,16 @@ export async function evaluatePersistentJobScheduleHealth(
   }
 
   const staleAfterMs = normalizePositiveInteger(options.staleAfterMs ?? 0, DEFAULT_STALE_AFTER_MS)
+  const notBefore = options.notBefore instanceof Date && Number.isFinite(options.notBefore.getTime())
+    ? options.notBefore.toISOString()
+    : null
   const queryExec = options.queryExec ?? query
   const result = await queryExec(
     `WITH latest_slots AS (
        SELECT DISTINCT ON (job_name)
               job_name,
-              status
+              status,
+              claimed_at
          FROM public.scheduled_job_slots
         WHERE job_name = ANY($1::text[])
         ORDER BY job_name, scheduled_for DESC
@@ -228,12 +233,13 @@ export async function evaluatePersistentJobScheduleHealth(
        SELECT job_name
          FROM latest_slots
         WHERE status = 'failed'
+          AND ($3::timestamptz IS NULL OR claimed_at >= $3::timestamptz)
      ), stale_running AS (
-       SELECT DISTINCT job_name
-         FROM public.scheduled_job_slots
-        WHERE job_name = ANY($1::text[])
-          AND status = 'running'
+       SELECT job_name
+         FROM latest_slots
+        WHERE status = 'running'
           AND claimed_at < NOW() - ($2::double precision * INTERVAL '1 millisecond')
+          AND ($3::timestamptz IS NULL OR claimed_at >= $3::timestamptz)
      )
      SELECT COALESCE(
               (SELECT array_agg(job_name ORDER BY job_name) FROM latest_failed),
@@ -243,7 +249,7 @@ export async function evaluatePersistentJobScheduleHealth(
               (SELECT array_agg(job_name ORDER BY job_name) FROM stale_running),
               ARRAY[]::text[]
             ) AS stale_running_jobs`,
-    [jobNames, staleAfterMs],
+    [jobNames, staleAfterMs, notBefore],
   )
   const latestFailedJobs = normalizeJobNameArray(result.rows?.[0]?.latest_failed_jobs)
   const staleRunningJobs = normalizeJobNameArray(result.rows?.[0]?.stale_running_jobs)

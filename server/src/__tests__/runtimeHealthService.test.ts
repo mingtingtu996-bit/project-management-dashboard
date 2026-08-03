@@ -136,6 +136,36 @@ describe('runtime health service', () => {
     })
   })
 
+  it('scopes persistent scheduler readiness to work claimed after this worker started', async () => {
+    const schedulerStartedAt = new Date('2026-08-03T11:00:00.000Z')
+    const schedulerPersistentHealthProbe = vi.fn(async (_options?: unknown) => ({
+      healthy: true,
+      registeredJobCount: 3,
+      latestFailedJobs: [],
+      staleRunningJobs: [],
+      catchUp: { concurrency: 1, active: 0, queued: 0 },
+    }))
+
+    const result = await evaluateRuntimeReadiness({
+      databaseProbe: vi.fn(async () => undefined),
+      schedulerExpected: true,
+      schedulerReady: true,
+      schedulerStartedAt,
+      schedulerRuntimeHealth: {
+        healthy: true,
+        acceptingJobs: true,
+        activeAttemptCount: 0,
+        timedOutAttemptCount: 0,
+        lastFailureCode: null,
+      },
+      schedulerPersistentHealthProbe,
+      env: {},
+    })
+
+    expect(result.status).toBe('ready')
+    expect(schedulerPersistentHealthProbe).toHaveBeenCalledWith({ notBefore: schedulerStartedAt })
+  })
+
   it('fails readiness closed when the persistent scheduler ledger cannot be inspected', async () => {
     const result = await evaluateRuntimeReadiness({
       databaseProbe: vi.fn(async () => undefined),

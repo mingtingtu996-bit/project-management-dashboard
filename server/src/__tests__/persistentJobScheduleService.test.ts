@@ -277,7 +277,7 @@ describe('persistent job schedule service', () => {
 
     expect(queryExec).toHaveBeenCalledWith(
       expect.stringContaining('public.scheduled_job_slots'),
-      [['dataQualityJob', 'projectDailySnapshotJob'], 15 * 60 * 1_000],
+      [['dataQualityJob', 'projectDailySnapshotJob'], 15 * 60 * 1_000, null],
     )
     expect(result).toEqual({
       healthy: false,
@@ -286,6 +286,38 @@ describe('persistent job schedule service', () => {
       staleRunningJobs: ['projectDailySnapshotJob'],
       catchUp: { concurrency: 2, active: 1, queued: 3 },
     })
+  })
+
+  it('only treats the latest slot for each job as stale', async () => {
+    const queryExec = vi.fn(async (_query: string, _params: unknown[]) => ({
+      rows: [{ latest_failed_jobs: [], stale_running_jobs: [] }],
+    }))
+
+    await evaluatePersistentJobScheduleHealth({
+      jobNames: ['projectDailySnapshotJob'],
+      queryExec,
+    })
+
+    const queryText = String(queryExec.mock.calls[0]?.[0] ?? '')
+    expect(queryText).toMatch(/latest_slots[\s\S]*claimed_at/u)
+    expect(queryText).toMatch(/stale_running[\s\S]*FROM latest_slots/u)
+  })
+
+  it('limits readiness failures to slots claimed after the worker health epoch', async () => {
+    const queryExec = vi.fn(async (_query: string, _params: unknown[]) => ({
+      rows: [{ latest_failed_jobs: [], stale_running_jobs: [] }],
+    }))
+    const notBefore = new Date('2026-08-03T11:00:00.000Z')
+
+    await evaluatePersistentJobScheduleHealth({
+      jobNames: ['projectDailySnapshotJob'],
+      notBefore,
+      queryExec,
+    })
+
+    const [queryText, queryParams] = queryExec.mock.calls[0] ?? []
+    expect(String(queryText)).toMatch(/claimed_at >= \$3::timestamptz/u)
+    expect(queryParams).toEqual([['projectDailySnapshotJob'], 30 * 60 * 1_000, notBefore.toISOString()])
   })
 
   it('uses the declared persistent registry when an API process has not started local timers', async () => {
@@ -301,7 +333,7 @@ describe('persistent job schedule service', () => {
 
     expect(queryExec).toHaveBeenCalledWith(
       expect.stringContaining('public.scheduled_job_slots'),
-      [expectedPersistentJobNames, 30 * 60 * 1_000],
+      [expectedPersistentJobNames, 30 * 60 * 1_000, null],
     )
     expect(result).toMatchObject({
       healthy: true,

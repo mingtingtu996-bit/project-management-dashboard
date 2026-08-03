@@ -11,17 +11,24 @@ type RuntimeReadinessOptions = {
   databaseProbe?: () => Promise<unknown>
   schedulerExpected?: boolean
   schedulerReady?: boolean
+  schedulerStartedAt?: Date
   schedulerRuntimeHealth?: JobRuntimeHealth
-  schedulerPersistentHealthProbe?: () => Promise<PersistentJobScheduleHealth>
+  schedulerPersistentHealthProbe?: (options?: { notBefore?: Date }) => Promise<PersistentJobScheduleHealth>
   projectHealthRefreshQueueStatus?: ProjectHealthRefreshQueueStatus
   timeoutMs?: number
   env?: RuntimeHealthEnv
 }
 
 let runtimeSchedulerReady = false
+let runtimeSchedulerStartedAt: Date | null = null
 
-export function markRuntimeSchedulerReady(ready = true) {
+export function markRuntimeSchedulerReady(ready = true, startedAt?: Date) {
   runtimeSchedulerReady = ready
+  runtimeSchedulerStartedAt = ready
+    ? new Date(startedAt instanceof Date && Number.isFinite(startedAt.getTime())
+      ? startedAt.getTime()
+      : Date.now())
+    : null
 }
 
 function projectRefFromSupabaseHost(hostname: string) {
@@ -97,9 +104,10 @@ export async function evaluateRuntimeReadiness(options: RuntimeReadinessOptions 
     : 2_000
   const schedulerExpected = options.schedulerExpected ?? false
   const schedulerReady = options.schedulerReady ?? runtimeSchedulerReady
+  const schedulerStartedAt = options.schedulerStartedAt ?? runtimeSchedulerStartedAt
   const schedulerRuntimeHealth = options.schedulerRuntimeHealth ?? getJobRuntimeHealth()
   const schedulerPersistentHealthProbe = options.schedulerPersistentHealthProbe
-    ?? (() => evaluatePersistentJobScheduleHealth())
+    ?? ((persistentOptions?: { notBefore?: Date }) => evaluatePersistentJobScheduleHealth(persistentOptions))
   const databaseProbe = options.databaseProbe ?? (() => query('SELECT 1 AS ready'))
 
   let databaseCheck: { status: 'ready' } | { status: 'not_ready'; reason: string }
@@ -129,7 +137,9 @@ export async function evaluateRuntimeReadiness(options: RuntimeReadinessOptions 
   } else {
     try {
       const persistentHealth = await runWithDeadline(
-        Promise.resolve().then(schedulerPersistentHealthProbe),
+        Promise.resolve().then(() => schedulerPersistentHealthProbe(
+          schedulerStartedAt ? { notBefore: schedulerStartedAt } : undefined,
+        )),
         timeoutMs,
       )
       schedulerCheck = persistentHealth.healthy
