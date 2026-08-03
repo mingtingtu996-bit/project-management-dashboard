@@ -14,6 +14,7 @@ FROM deps AS builder
 
 COPY tsconfig.json tsconfig.build.json ./
 COPY src ./src
+COPY scripts ./scripts
 
 RUN npm run build
 
