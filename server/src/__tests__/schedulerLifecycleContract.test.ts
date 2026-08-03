@@ -23,7 +23,7 @@ describe('scheduler lifecycle contract', () => {
     const index = readFileSync(resolve(workspaceRoot, 'server/src/index.ts'), 'utf8')
 
     expect(index).toContain('await schedulerModule.startAllJobs')
-    expect(index).toContain('markRuntimeSchedulerReady(schedulerStarted)')
+    expect(index).toContain('markRuntimeSchedulerReady(schedulerStarted, schedulerStartedAt)')
     expect(index).toContain('beginJobRuntimeShutdown()')
     expect(index).toContain('waitForActiveJobsToDrain')
     expect(index).toContain('releaseSchedulerLeadership')
