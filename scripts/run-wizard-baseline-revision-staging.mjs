@@ -508,6 +508,27 @@ async function authenticate(expectedCompanyId = requestedCompanyId) {
 
 async function readDurationAccuracySummary() {
   const accuracyCall = await apiRequest('GET', '/api/admin/duration-accuracy/summary')
+  const accuracyErrorCode = String(accuracyCall.body?.error?.code ?? '').trim()
+  const accuracyErrorMessage = String(accuracyCall.body?.error?.message ?? '').trim()
+  const isExpectedStagingAdminOnlyDenial = targetEnvironment === 'staging'
+    && accuracyCall.response.status === 403
+    && accuracyErrorCode === 'FORBIDDEN'
+    && accuracyErrorMessage === 'Duration accuracy diagnostics are available to company administrators only.'
+  if (isExpectedStagingAdminOnlyDenial) {
+    result.steps.durationAccuracyReadback = {
+      status: 'unavailable',
+      httpStatus: accuracyCall.response.status,
+      dataState: 'forbidden_company_admin_required',
+      nonBlocking: true,
+      claimBoundary: 'wizard_business_smoke_only_no_accuracy_readback_claim',
+      metricCount: null,
+      totalSampleCount: null,
+      metricsWithMae: null,
+      metricsWithMape: null,
+      metrics: [],
+    }
+    return
+  }
   const accuracySummary = assertApi('read staging duration accuracy summary', accuracyCall, [200])
   const metrics = accuracySummary?.metrics
   if (!Array.isArray(metrics)) {
