@@ -96,6 +96,45 @@ describe('executeSQL LIMIT parsing', () => {
     mocks.rawQuery.mockResolvedValue({ rows: [] })
   })
 
+  it.each([
+    {
+      label: 'block-comment-prefixed data-modifying CTE',
+      sql: `/* task-write-finalization-outbox:claim */
+WITH selected AS (
+  SELECT id FROM task_write_finalization_outbox WHERE processing_status = $1
+)
+UPDATE task_write_finalization_outbox
+SET processing_status = $2
+FROM selected
+WHERE task_write_finalization_outbox.id = selected.id
+RETURNING task_write_finalization_outbox.id`,
+    },
+    {
+      label: 'line-comment-prefixed read CTE',
+      sql: `-- duration-learning-runtime-evidence-outbox:read
+WITH selected AS (
+  SELECT id FROM duration_learning_runtime_evidence_outbox WHERE processing_status = $1
+)
+SELECT id FROM selected`,
+    },
+    {
+      label: 'block-comment-prefixed schema-qualified update',
+      sql: `/* duration-learning-runtime-evidence-outbox:quarantine-unsafe */
+UPDATE public.duration_learning_runtime_evidence_outbox outbox
+SET processing_status = $2,
+    updated_at = CURRENT_TIMESTAMP
+WHERE outbox.processing_status = $1
+RETURNING outbox.event_key`,
+    },
+  ])('routes $label through the direct SQL fallback without rewriting the statement', async ({ sql }) => {
+    mocks.rawQuery.mockResolvedValueOnce({ rows: [{ id: 'row-1' }] })
+
+    await expect(executeSQL(sql, ['pending', 'processing'])).resolves.toEqual([{ id: 'row-1' }])
+
+    expect(mocks.rawQuery).toHaveBeenCalledWith(sql, ['pending', 'processing'])
+    expect(mocks.from).not.toHaveBeenCalled()
+  })
+
   it('supports literal LIMIT values', async () => {
     await executeSQL('SELECT * FROM tasks WHERE id = ? LIMIT 1', ['task-1'])
 

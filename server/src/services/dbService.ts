@@ -805,6 +805,43 @@ function isMissingSupabaseResourceError(error: QueryErrorLike | null | undefined
   )
 }
 
+function stripLeadingSqlComments(sql: string) {
+  let cursor = 0
+
+  while (cursor < sql.length) {
+    while (cursor < sql.length && /\s/.test(sql[cursor])) cursor += 1
+
+    if (sql.startsWith('--', cursor)) {
+      const lineEnd = sql.indexOf('\n', cursor + 2)
+      if (lineEnd === -1) return ''
+      cursor = lineEnd + 1
+      continue
+    }
+
+    if (sql.startsWith('/*', cursor)) {
+      let depth = 1
+      cursor += 2
+      while (cursor < sql.length && depth > 0) {
+        if (sql.startsWith('/*', cursor)) {
+          depth += 1
+          cursor += 2
+        } else if (sql.startsWith('*/', cursor)) {
+          depth -= 1
+          cursor += 2
+        } else {
+          cursor += 1
+        }
+      }
+      if (depth > 0) return ''
+      continue
+    }
+
+    break
+  }
+
+  return sql.slice(cursor)
+}
+
 // ─── 数据访问规范（2026-04-06 制定）─────────────────────────────────────────
 // 【强制】新增查询必须优先使用 Supabase JS SDK 直接调用（如本文件上方的 getTask / createTask 等）
 // 【禁止】新增复杂 executeSQL 调用，包括但不限于：
@@ -817,7 +854,9 @@ function isMissingSupabaseResourceError(error: QueryErrorLike | null | undefined
 // ─────────────────────────────────────────────────────────────────────────────
 async function executeSQL<T = any>(sql: string, params: any[] = []): Promise<T[]> {
   const s = sql.trim()
-  const upper = s.toUpperCase()
+  const classificationSql = stripLeadingSqlComments(s)
+  const upper = classificationSql.toUpperCase()
+  const hasLeadingSqlComment = classificationSql.length > 0 && classificationSql !== s
 
   if (isDatabaseTransactionActive()) {
     return runDirectExecuteSqlFallback<T>(s, params, 'dbService.executeSQL active transaction')
@@ -825,6 +864,10 @@ async function executeSQL<T = any>(sql: string, params: any[] = []): Promise<T[]
 
   if (shouldUseDirectSqlPath()) {
     return runDirectExecuteSqlFallback<T>(s, params, 'dbService.executeSQL direct runtime SQL')
+  }
+
+  if (hasLeadingSqlComment || upper.startsWith('WITH')) {
+    return runDirectExecuteSqlFallback<T>(s, params, 'dbService.executeSQL annotated or CTE statement')
   }
 
   // ── SELECT ──────────────────────────────────────────────────────────────────
