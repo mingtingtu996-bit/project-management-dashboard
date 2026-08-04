@@ -556,7 +556,8 @@ verify_release_health() {
   public_file="/tmp/project-management-public-health-${expected_sha}.json"
   origin_file="/tmp/project-management-origin-health-${expected_sha}.json"
   web_build_file="/tmp/project-management-web-build-${expected_sha}.json"
-  retry 12 5 verify_runtime_container_identities "$expected_sha" || return 1
+  # The web healthcheck has a 20s start period, 30s interval, and three retries.
+  retry 31 5 verify_runtime_container_identities "$expected_sha" || return 1
   validate_public_ingress_contract || return 1
   retry 12 5 curl --fail --silent --show-error "$INTERNAL_HEALTH_URL" -o "$internal_file" || return 1
   verify_readyz_identity "$internal_file" "$expected_sha" || return 1
