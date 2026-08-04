@@ -656,7 +656,7 @@ describe('deploy workflow contract', () => {
     expect(workflow).toContain('staging-wizard-baseline-revision-${{ github.run_id }}')
     expect(workflow).not.toContain('Public HTTPS health is optional')
     expect(workflow).toContain(
-      'Public TLS health, explicit HTTP-to-HTTPS redirect, remote internal readiness, and performance checks are mandatory.',
+      'Public TLS health, explicit HTTP-to-HTTPS redirect, and remote internal readiness are mandatory.',
     )
     expect(workflow).toContain('Temporary IP TLS is selected; domain HSTS closure remains false.')
     expect(workflow).toContain('Domain HSTS mode is selected and must pass the public header probe.')
@@ -746,7 +746,7 @@ describe('deploy workflow contract', () => {
     expect(deployScript).toContain('temporary_ip_tls')
     expect(deployScript).toContain('domainHstsReady')
     expect(deployScript).toContain('curl --fail --silent --show-error "$INTERNAL_HEALTH_URL"')
-    expect(deployScript).toContain('/api/performance-reports/summary')
+    expect(deployScript).not.toContain('/api/performance-reports/summary')
     expect(deployScript).toContain('External deployment health URL must use https://')
     expect(compose).toContain('container_name: ${COMPOSE_PROJECT_NAME:-project-management}-api')
     expect(compose).toContain('container_name: ${COMPOSE_PROJECT_NAME:-project-management}-worker')

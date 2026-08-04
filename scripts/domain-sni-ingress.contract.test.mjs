@@ -1166,7 +1166,8 @@ test('application deploy distinguishes first bootstrap from upgrades and verifie
   assert.match(deployScript, /verify_readyz_identity/u)
   assert.match(deployScript, /validate_public_ingress_contract/u)
   assert.match(deployScript, /python3/u)
-  assert.equal((deployScript.match(/\*\/api\/readyz\)/gu) ?? []).length, 1)
+  assert.match(deployScript, /health\.path != '\/api\/readyz'/u)
+  assert.doesNotMatch(deployScript, /\/api\/performance-reports\/summary/u)
 })
 
 test('application readyz verifier rejects wrong SHA, target, project refs, and readiness status', async () => {

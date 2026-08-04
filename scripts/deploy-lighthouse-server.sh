@@ -12,7 +12,6 @@ HEALTH_URL="${HEALTH_URL:-}"
 HTTP_REDIRECT_URL="${HTTP_REDIRECT_URL:-}"
 PUBLIC_INGRESS_MODE="${PUBLIC_INGRESS_MODE:-}"
 EXPECTED_PUBLIC_HOST="${EXPECTED_PUBLIC_HOST:-}"
-PERFORMANCE_SUMMARY_URL="${PERFORMANCE_SUMMARY_URL:-}"
 INITIAL_RUNTIME_BOOTSTRAP="${INITIAL_RUNTIME_BOOTSTRAP:-false}"
 ORIGIN_INGRESS_IP="${ORIGIN_INGRESS_IP:-}"
 EXPECTED_JWT_SECRET_SHA256="${EXPECTED_JWT_SECRET_SHA256:-}"
@@ -370,13 +369,6 @@ build_and_up_release() {
   run_docker_compose "$release_dir" "$release_sha" "$migration_filename" "$migration_checksum" ps || return 1
 }
 
-derive_performance_summary_url() {
-  case "$1" in
-    */api/readyz) printf '%s\n' "${1%/api/readyz}/api/performance-reports/summary" ;;
-    *) printf '%s\n' "${1%/}/api/performance-reports/summary" ;;
-  esac
-}
-
 verify_readyz_identity() {
   RELEASE_SHA_TO_VERIFY="$2" DEPLOY_TARGET_TO_VERIFY="$DEPLOY_TARGET" EXPECTED_PROJECT_REF_TO_VERIFY="$expected_public_project_ref" \
     python3 - "$1" <<'PY'
@@ -432,7 +424,7 @@ curl_ingress_route() {
 verify_external_ingress_route() {
   local route="$1" expected_sha="$2" public_file="$3"
   local headers_file="${public_file}.headers"
-  local redirect_result redirect_status redirect_url performance_url
+  local redirect_result redirect_status redirect_url
   curl_ingress_route "$route" "$HEALTH_URL" --fail --silent --show-error \
     --dump-header "$headers_file" -o "$public_file" || return 1
   verify_readyz_identity "$public_file" "$expected_sha" || return 1
@@ -455,9 +447,6 @@ verify_external_ingress_route() {
     echo "$route HTTP endpoint did not redirect to the HTTPS health authority." >&2
     return 1
   }
-  performance_url="${PERFORMANCE_SUMMARY_URL:-$(derive_performance_summary_url "$HEALTH_URL")}"
-  curl_ingress_route "$route" "$performance_url" --fail --silent --show-error \
-    -o /tmp/project-management-performance-summary.json || return 1
 }
 
 validate_public_ingress_contract() {

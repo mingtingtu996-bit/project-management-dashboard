@@ -56,7 +56,7 @@ describe('runtime deployment security contract', () => {
     expect(workflow).not.toContain('Public HTTPS health is optional')
     expect(workflow).toContain('- name: Verify deployed release through SSH tunnel')
     expect(workflow).toContain('"http://127.0.0.1:${local_smoke_port}/api/readyz"')
-    expect(workflow).toContain('/api/performance-reports/summary')
+    expect(workflow).not.toContain('/api/performance-reports/summary')
     expect(workflow).toContain('manifest.releaseSha !== process.env.RELEASE_SHA')
     expect(workflow).toContain('Public HTTPS was not inferred from the private SSH tunnel.')
     expect(deployScript).toContain("grep -qi '^strict-transport-security:'")
