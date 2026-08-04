@@ -119,6 +119,7 @@ test('wizard baseline revision smoke requires explicit same-SHA production ident
       const child = spawn(process.execPath, [
         smokeScriptPath,
         '--env-file', envPath,
+        '--public-origin', 'https://workbuddy.example.com',
         '--target-environment', 'production',
         '--release-sha', 'a'.repeat(40),
         '--expected-project-ref', 'wwdrkjnbvcbfytwnnyvs',
@@ -139,11 +140,13 @@ test('wizard baseline revision smoke requires explicit same-SHA production ident
   }
 })
 
-test('wizard baseline revision staging smoke reads duration accuracy from the real staging database without inventing an accuracy claim', () => {
+test('wizard baseline revision staging smoke keeps admin accuracy evidence separate from its ordinary-user business flow', () => {
   assert.match(smokeSource, /\/api\/admin\/duration-accuracy\/summary/)
   assert.match(smokeSource, /durationAccuracyReadback/)
   assert.match(smokeSource, /empty_no_completed_samples/)
   assert.match(smokeSource, /readback_only_not_accuracy_acceptance/)
+  assert.match(smokeSource, /forbidden_company_admin_required/)
+  assert.match(smokeSource, /wizard_business_smoke_only_no_accuracy_readback_claim/)
 })
 
 test('wizard baseline revision staging smoke previews all 11 canonical business types before its one disposable commit chain', () => {
@@ -247,7 +250,10 @@ test('wizard baseline revision staging smoke recovers and deletes a project when
       return
     }
     if (req.method === 'GET' && req.url === '/api/admin/duration-accuracy/summary') {
-      send(200, { metrics: [] })
+      send(403, {
+        code: 'FORBIDDEN',
+        message: 'Duration accuracy diagnostics are available to company administrators only.',
+      })
       return
     }
     if (req.method === 'POST' && req.url === '/api/projects/wizard') {
@@ -297,6 +303,7 @@ test('wizard baseline revision staging smoke recovers and deletes a project when
       smokeScriptPath,
       '--env-file', envPath,
       '--api-base-url', `http://127.0.0.1:${address.port}`,
+      '--public-origin', 'https://workbuddy.example.com',
       '--request-timeout-ms', '1000',
       '--recovery-delay-ms', '100',
       '--project-id', createdProjectId,
@@ -318,8 +325,14 @@ test('wizard baseline revision staging smoke recovers and deletes a project when
   const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'))
   assert.equal(report.projectId, createdProjectId)
   assert.equal(report.steps.projectRecovery.status, 'pass')
-  assert.equal(report.steps.durationAccuracyReadback.status, 'pass')
-  assert.equal(report.steps.durationAccuracyReadback.dataState, 'empty_no_completed_samples')
+  assert.equal(report.steps.durationAccuracyReadback.status, 'unavailable')
+  assert.equal(report.steps.durationAccuracyReadback.httpStatus, 403)
+  assert.equal(report.steps.durationAccuracyReadback.dataState, 'forbidden_company_admin_required')
+  assert.equal(report.steps.durationAccuracyReadback.nonBlocking, true)
+  assert.equal(
+    report.steps.durationAccuracyReadback.claimBoundary,
+    'wizard_business_smoke_only_no_accuracy_readback_claim',
+  )
   assert.equal(report.steps.previewBusinessTypeMatrix.status, 'pass')
   assert.equal(report.steps.previewBusinessTypeMatrix.previewCount, 11)
   assert.equal(report.cleanup.status, 'pass')

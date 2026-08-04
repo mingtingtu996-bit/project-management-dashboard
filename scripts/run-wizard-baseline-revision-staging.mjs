@@ -508,6 +508,21 @@ async function authenticate(expectedCompanyId = requestedCompanyId) {
 
 async function readDurationAccuracySummary() {
   const accuracyCall = await apiRequest('GET', '/api/admin/duration-accuracy/summary')
+  if (accuracyCall.response.status === 403) {
+    result.steps.durationAccuracyReadback = {
+      status: 'unavailable',
+      httpStatus: accuracyCall.response.status,
+      dataState: 'forbidden_company_admin_required',
+      nonBlocking: true,
+      claimBoundary: 'wizard_business_smoke_only_no_accuracy_readback_claim',
+      metricCount: null,
+      totalSampleCount: null,
+      metricsWithMae: null,
+      metricsWithMape: null,
+      metrics: [],
+    }
+    return
+  }
   const accuracySummary = assertApi('read staging duration accuracy summary', accuracyCall, [200])
   const metrics = accuracySummary?.metrics
   if (!Array.isArray(metrics)) {
