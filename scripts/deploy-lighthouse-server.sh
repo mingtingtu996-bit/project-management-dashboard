@@ -586,6 +586,31 @@ verify_release_health() {
   fi
 }
 
+print_runtime_failure_diagnostics() {
+  local service container
+  echo "=== Runtime failure diagnostics (release ${RELEASE_SHA}) ===" >&2
+  run_docker_command ps -a \
+    --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME_VALUE}" \
+    --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}' >&2 || true
+  for service in web api worker; do
+    container="${COMPOSE_PROJECT_NAME_VALUE}-${service}"
+    echo "--- ${service}: state and health ---" >&2
+    run_docker_command container inspect "$container" \
+      --format '{{json .State}}' >&2 || true
+    echo "--- ${service}: readiness response ---" >&2
+    if [ "$service" = web ]; then
+      run_docker_command exec "$container" wget --quiet --output-document=- \
+        http://127.0.0.1/api/readyz >&2 || true
+    else
+      run_docker_command exec "$container" node -e \
+        "fetch('http://127.0.0.1:3001/api/readyz').then(async r=>{console.log(JSON.stringify({status:r.status,body:await r.text()}))}).catch(error=>{console.log(JSON.stringify({error:String(error)}));process.exitCode=1})" \
+        >&2 || true
+    fi
+    echo "--- ${service}: recent logs ---" >&2
+    run_docker_command logs --timestamps --tail 200 "$container" >&2 || true
+  done
+}
+
 validate_release_archive() {
   tar -tzf "$1" | awk '{ name=$0; sub(/^\.\//, "", name); if (name ~ /^\// || name ~ /(^|\/)\.\.($|\/)/ || name == "deploy/env/server.production.env") exit 1 }'
 }
@@ -689,6 +714,7 @@ deployment_failure() {
   local exit_code=$? rollback_status=0
   trap - ERR INT TERM
   set +e
+  print_runtime_failure_diagnostics || true
   [ -z "$CANDIDATE_DIR" ] || rm -rf "$CANDIDATE_DIR"
   if [ -f "$STATE_FILE" ]; then
     rollback_application_release

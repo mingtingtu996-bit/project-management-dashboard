@@ -43,6 +43,28 @@ test('release archives are prepared outside the live tree and activated with a r
   assert.doesNotMatch(script, /tar -xzf "\$RELEASE_ARCHIVE" -C "\$APP_DIR"/u)
 })
 
+test('deployment failures capture readiness and container diagnostics before rollback', async () => {
+  const script = await source('scripts/deploy-lighthouse-server.sh')
+  const diagnostics = script.match(
+    /(print_runtime_failure_diagnostics\(\) \{[\s\S]*?\n\})\n\nvalidate_release_archive/u,
+  )?.[1]
+  assert.ok(diagnostics, 'runtime failure diagnostics must remain executable in isolation')
+  assert.match(diagnostics, /label=com\.docker\.compose\.project=/u)
+  assert.match(diagnostics, /container inspect/u)
+  assert.match(diagnostics, /\/api\/readyz/u)
+  assert.match(diagnostics, /logs --timestamps --tail 200/u)
+
+  const failureBody = script.match(
+    /(deployment_failure\(\) \{[\s\S]*?\n\})\ntrap deployment_failure/u,
+  )?.[1]
+  assert.ok(failureBody, 'deployment failure handler must remain executable in isolation')
+  assert.match(failureBody, /print_runtime_failure_diagnostics \|\| true/u)
+  assert.ok(
+    failureBody.indexOf('print_runtime_failure_diagnostics') < failureBody.indexOf('rollback_application_release'),
+    'diagnostics must run before rollback mutates the containers',
+  )
+})
+
 test('initial bootstrap treats an absent current pointer as no previous release', async () => {
   const script = await source('scripts/deploy-lighthouse-server.sh')
   const resolveCurrentReleaseTarget = script.match(
