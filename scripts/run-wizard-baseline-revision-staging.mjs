@@ -508,7 +508,13 @@ async function authenticate(expectedCompanyId = requestedCompanyId) {
 
 async function readDurationAccuracySummary() {
   const accuracyCall = await apiRequest('GET', '/api/admin/duration-accuracy/summary')
-  if (accuracyCall.response.status === 403) {
+  const accuracyErrorCode = String(accuracyCall.body?.error?.code ?? '').trim()
+  const accuracyErrorMessage = String(accuracyCall.body?.error?.message ?? '').trim()
+  const isExpectedStagingAdminOnlyDenial = targetEnvironment === 'staging'
+    && accuracyCall.response.status === 403
+    && accuracyErrorCode === 'FORBIDDEN'
+    && accuracyErrorMessage === 'Duration accuracy diagnostics are available to company administrators only.'
+  if (isExpectedStagingAdminOnlyDenial) {
     result.steps.durationAccuracyReadback = {
       status: 'unavailable',
       httpStatus: accuracyCall.response.status,
