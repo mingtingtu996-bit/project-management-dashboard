@@ -181,6 +181,26 @@ describe('deploy workflow contract', () => {
     expect(deployJob).toContain('run: npm run verify:workflow-contract')
   })
 
+  it('waits through the web healthcheck budget before rolling back a release', () => {
+    const compose = readFileSync(resolve(workspaceRoot, 'deploy', 'docker-compose.lighthouse.yml'), 'utf8')
+    const deployScript = readFileSync(resolve(workspaceRoot, 'scripts', 'deploy-lighthouse-server.sh'), 'utf8')
+    const webSectionStart = compose.indexOf('  web:')
+    const webSection = compose.slice(webSectionStart)
+    const healthcheck = /interval:\s*(\d+)s[\s\S]*?timeout:\s*(\d+)s[\s\S]*?retries:\s*(\d+)[\s\S]*?start_period:\s*(\d+)s/u.exec(webSection)
+    const runtimeRetry = /retry\s+(\d+)\s+(\d+)\s+verify_runtime_container_identities/u.exec(deployScript)
+
+    expect(webSectionStart).toBeGreaterThanOrEqual(0)
+    expect(healthcheck).not.toBeNull()
+    expect(runtimeRetry).not.toBeNull()
+
+    const [, interval, timeout, retries, startPeriod] = healthcheck ?? []
+    const [, attempts, delay] = runtimeRetry ?? []
+    const webHealthcheckBudgetSeconds = Number(startPeriod) + Number(timeout) + Number(interval) * Number(retries)
+    const runtimeRetryWindowSeconds = (Number(attempts) - 1) * Number(delay)
+
+    expect(runtimeRetryWindowSeconds).toBeGreaterThanOrEqual(webHealthcheckBudgetSeconds)
+  })
+
   it('installs the client toolchain before the combined governance gate in server quality', () => {
     const workflow = readFileSync(resolve(workspaceRoot, '.github', 'workflows', 'deploy.yml'), 'utf8')
     const serverQualityStart = workflow.indexOf('  server-quality:')
