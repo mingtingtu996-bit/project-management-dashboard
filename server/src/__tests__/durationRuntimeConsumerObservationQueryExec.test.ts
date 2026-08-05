@@ -106,6 +106,35 @@ describe('duration runtime consumer PostgreSQL query adapter', () => {
     expect(calls[0]?.sql).toContain('$5::jsonb')
   })
 
+  it('allows the exact project company lookup used by duration-learning scope resolution', async () => {
+    const {
+      createDurationRuntimeConsumerObservationQueryExec,
+    } = await import('../services/durationRuntimeConsumerObservationService.js')
+    const calls: Array<{ sql: string, params: unknown[] }> = []
+    const transactionQueryExec = async <T = Record<string, unknown>>(
+      sql: string,
+      params: unknown[] = [],
+    ): Promise<T[]> => {
+      calls.push({ sql, params })
+      return [{ company_id: 'company-1' }] as T[]
+    }
+    const queryExec = createDurationRuntimeConsumerObservationQueryExec(transactionQueryExec)
+
+    const rows = await queryExec(
+      `select company_id
+         from public.projects
+        where id = $1::uuid
+        limit 1`,
+      ['project-1'],
+    )
+
+    expect(rows).toEqual([{ company_id: 'company-1' }])
+    expect(calls).toEqual([{
+      sql: 'select company_id from public.projects where id = $1::uuid limit 1',
+      params: ['project-1'],
+    }])
+  })
+
   it('serializes runtime call JSONB parameters before invoking pg', async () => {
     const {
       createDurationRuntimeConsumerObservationQueryExec,
