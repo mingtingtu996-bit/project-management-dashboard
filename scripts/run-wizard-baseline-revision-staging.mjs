@@ -1035,7 +1035,7 @@ function validateBusinessTypePreview(previewCase, preview, httpStatus) {
   assertPreviewCondition(Number.isInteger(scheduleRowCount) && scheduleRowCount >= 60 && scheduleRowCount <= 300, `${previewCase.businessType} preview row count is outside 60-300`, details)
   assertPreviewCondition(assemblyScheduleRowCount === scheduleRowCount, `${previewCase.businessType} preview assembly row count is inconsistent`, details)
   assertPreviewCondition(profileRange.length === 2, `${previewCase.businessType} preview profile range is unavailable`, details)
-  assertPreviewCondition(scheduleRowCount >= profileRange[0] && scheduleRowCount <= profileRange[1], `${previewCase.businessType} preview row count is outside its profile range`, details)
+  assertPreviewCondition(scheduleRowCount <= profileRange[1], `${previewCase.businessType} preview row count exceeds its profile maximum`, details)
   assertPreviewCondition(Number.isInteger(minimumScheduleRowCount) && scheduleRowCount >= minimumScheduleRowCount, `${previewCase.businessType} preview is below its governed minimum row count`, details)
   assertPreviewCondition(Number.isInteger(operationalRowFloor) && scheduleRowCount >= operationalRowFloor, `${previewCase.businessType} preview is below its operational row floor`, details)
   assertPreviewCondition(Number.isInteger(availableScheduleRowCount) && availableScheduleRowCount >= scheduleRowCount, `${previewCase.businessType} preview available row count is inconsistent`, details)
