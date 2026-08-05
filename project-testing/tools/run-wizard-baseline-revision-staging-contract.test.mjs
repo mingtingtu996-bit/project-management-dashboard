@@ -29,6 +29,76 @@ const canonicalBusinessPreviewCases = [
   { businessType: 'modular_building', businessSubtype: null, markerPrefix: 'BTMP-MOD-' },
 ]
 
+function buildReadyPreviewResponse(previewCase) {
+  return {
+    estimatedRowCount: 120,
+    profile: {
+      identity: {
+        businessType: previewCase.businessType,
+        businessSubtype: previewCase.businessSubtype,
+      },
+      issues: [],
+      generation: {
+        masterPlanProfile: {
+          layer: 'master_plan',
+          rowCountRange: [60, 180],
+        },
+        executableDefaultMasterPlanAssembly: {
+          status: 'executable_default_master_plan_ready',
+          businessType: previewCase.businessType,
+          readyForWizardCommit: true,
+          assetAuthority: 'system_standard_seed',
+          scheduleRowCount: 120,
+          minimumScheduleRowCount: 60,
+          operationalRowFloor: 60,
+          availableScheduleRowCount: 120,
+          assetInventoryShortfallAccepted: false,
+          visibleDependencyCount: 119,
+          visibleDependencyCoverageRate: 0.99,
+          missingExecutionPhases: [],
+          invalidDurationRowCount: 0,
+          methodConflictCount: 0,
+          durationAssetSemanticMismatchCount: 0,
+          dependencyCycleRowCount: 0,
+          schedulePropagationCycleRowCount: 0,
+          networkComponentCount: 1,
+          networkRootCount: 1,
+          networkSinkCount: 1,
+          readinessReasonCodes: [],
+        },
+        executableDefaultMasterPlanPreview: {
+          status: 'executable_default_master_plan_ready',
+          businessType: previewCase.businessType,
+          readyForWizardCommit: true,
+          scheduleRowCount: 120,
+          visibleDependencyCount: 119,
+          dependencyCycleRowCount: 0,
+          schedulePropagationCycleRowCount: 0,
+          projectStartDate: '2026-08-01',
+          projectEndDate: '2027-08-01',
+          previewOnly: true,
+          mutationBoundary: 'preview_only_no_db_write',
+          rows: [{
+            clientRowId: `${previewCase.businessType}-marker`,
+            wbsCode: `${previewCase.markerPrefix}01`,
+            plannedStartDate: '2026-08-01',
+            plannedEndDate: '2026-08-15',
+            standardWorkDurationSeedStableCode: `${previewCase.businessType}-duration-seed`,
+            t2RhythmTemplateId: `${previewCase.businessType}-t2-rhythm-v1`,
+          }],
+        },
+        planQualityDiagnostics: {
+          status: 'ready',
+          readyForWizardCommit: true,
+          runtimeApprovalRequired: false,
+          blocksWizardCommit: false,
+          unresolvedDependencyCount: 0,
+        },
+      },
+    },
+  }
+}
+
 test('wizard baseline revision staging smoke uses ordinary plan confirmation', () => {
   assert.match(smokeSource, /planQualityDiagnostics/)
   assert.match(smokeSource, /publish edited baseline/)
@@ -138,6 +208,101 @@ test('wizard baseline revision smoke requires explicit same-SHA production ident
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }
+})
+
+test('production wizard mutation fixture remains the approved one-building legacy payload', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'workbuddy-production-mutation-fixture-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+
+  const companyId = '11111111-1111-4111-8111-111111111111'
+  const projectRef = 'wwdrkjnbvcbfytwnnyvs'
+  const releaseSha = 'a'.repeat(40)
+  let createRequest = null
+  const server = http.createServer(async (req, res) => {
+    const chunks = []
+    for await (const chunk of req) chunks.push(chunk)
+    const requestBody = chunks.length > 0 ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : null
+    const send = (status, data) => {
+      res.writeHead(status, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ success: status < 400, data }))
+    }
+
+    if (req.method === 'POST' && req.url === '/api/auth/login') {
+      send(200, { token: 'test-token', user: { currentCompanyId: companyId } })
+      return
+    }
+    if (req.method === 'GET' && req.url === '/api/admin/duration-accuracy/summary') {
+      send(200, { metrics: [] })
+      return
+    }
+    if (req.method === 'POST' && req.url === '/api/projects/wizard/preview') {
+      const previewCase = canonicalBusinessPreviewCases.find((candidate) => (
+        candidate.businessType === requestBody.businessType
+      ))
+      assert.ok(previewCase, `unexpected preview business type: ${requestBody.businessType}`)
+      send(200, buildReadyPreviewResponse(previewCase))
+      return
+    }
+    if (req.method === 'POST' && req.url === '/api/projects/wizard') {
+      createRequest = requestBody
+      send(500, { code: 'EXPECTED_TEST_STOP', message: 'stop before mutation' })
+      return
+    }
+    send(404, null)
+  })
+  t.after(() => new Promise((resolveClose) => server.close(resolveClose)))
+  await new Promise((resolveListen) => server.listen(0, '127.0.0.1', resolveListen))
+  const address = server.address()
+  assert.equal(typeof address, 'object')
+
+  const envPath = path.join(root, 'production.env')
+  const reportPath = path.join(root, 'report.json')
+  const readyzPath = path.join(root, 'readyz.json')
+  fs.writeFileSync(envPath, [
+    `SUPABASE_URL=https://${projectRef}.supabase.co`,
+    'TEST_USERNAME=smoke@example.com',
+    'TEST_USER_PASSWORD=test-password',
+    '',
+  ].join('\n'))
+  fs.writeFileSync(readyzPath, JSON.stringify({
+    build: {
+      releaseSha,
+      deployTarget: 'production',
+      supabaseProjectRef: projectRef,
+      databaseProjectRef: projectRef,
+    },
+  }))
+
+  const childResult = await new Promise((resolveChild, rejectChild) => {
+    const child = spawn(process.execPath, [
+      smokeScriptPath,
+      '--env-file', envPath,
+      '--api-base-url', `http://127.0.0.1:${address.port}`,
+      '--public-origin', 'https://workbuddy.example.com',
+      '--target-environment', 'production',
+      '--production-mutation-approval', 'I_APPROVE_DISPOSABLE_PRODUCTION_WIZARD_SMOKE',
+      '--deployed-readiness-file', readyzPath,
+      '--expected-project-ref', projectRef,
+      '--release-sha', releaseSha,
+      '--report', reportPath,
+    ], { cwd: workspaceRoot })
+    let stderr = ''
+    child.stderr.on('data', (chunk) => { stderr += chunk })
+    child.once('error', rejectChild)
+    child.once('close', (code) => resolveChild({ code, stderr }))
+  })
+
+  assert.equal(childResult.code, 1)
+  assert.ok(createRequest)
+  assert.equal(createRequest.wizardPayload.buildingCount, 1)
+  assert.equal(createRequest.wizardPayload.projectFeatures.standardFloorCount, 22)
+  assert.equal(createRequest.wizardPayload.scopeTree.filter((node) => node.type === 'building').length, 1)
+  const productionPhysicalZones = createRequest.wizardPayload.scopeTree.filter((node) => node.type === 'physical_zone')
+  assert.deepEqual(productionPhysicalZones.map((node) => node.metadata), [
+    { physicalCategory: 'tower', coverageRole: 'overlay_trigger', areaAccountingMode: 'not_counted' },
+    { physicalCategory: 'basement', coverageRole: 'overlay_trigger', areaAccountingMode: 'not_counted' },
+    { physicalCategory: 'outdoor_site', coverageRole: 'overlay_trigger', areaAccountingMode: 'not_counted' },
+  ])
 })
 
 test('wizard baseline revision staging smoke keeps admin accuracy evidence separate from its ordinary-user business flow', () => {
@@ -291,32 +456,26 @@ test('wizard baseline revision staging smoke reports sanitized preview readiness
       return
     }
     if (req.method === 'POST' && req.url === '/api/projects/wizard/preview') {
-      send(200, {
-        profile: {
-          identity: { businessType: 'general_civil', businessSubtype: 'civil_residential' },
-          issues: [{
-            code: 'SCOPE_WBS_READINESS_MISSING',
-            severity: 'blocking',
-            details: {
-              itemPackPattern: 'OUT-',
-              matchMetadata: {
-                physicalSpaceKind: 'outdoor_site',
-                internalSecret: 'nested-must-not-leak',
-              },
-              missingObjectLabel: 'outdoor site',
-              internalSecret: 'must-not-leak',
-            },
-          }],
-          generation: {
-            masterPlanProfile: { rowCountRange: [78, 176] },
-            executableDefaultMasterPlanAssembly: {
-              status: 'executable_default_master_plan_blocked',
-              readyForWizardCommit: false,
-            },
-            planQualityDiagnostics: { status: 'blocked', blocksWizardCommit: true },
+      const preview = buildReadyPreviewResponse(canonicalBusinessPreviewCases[0])
+      preview.profile.issues = [{
+        code: 'SCOPE_WBS_READINESS_MISSING',
+        severity: 'blocking',
+        details: {
+          itemPackPattern: 'OUT-',
+          matchMetadata: {
+            physicalSpaceKind: 'outdoor_site',
+            internalSecret: 'nested-must-not-leak',
           },
+          matchedStableCodes: ['OUT-01', { internalSecret: 'array-must-not-leak' }],
+          missingObjectLabel: 'outdoor site',
+          internalSecret: 'must-not-leak',
         },
-      })
+      }]
+      preview.profile.generation.executableDefaultMasterPlanAssembly.assetAuthority = 'legacy_untrusted_seed'
+      preview.profile.generation.executableDefaultMasterPlanAssembly.internalSecret = 'assembly-must-not-leak'
+      preview.profile.generation.planQualityDiagnostics.internalSecret = 'quality-must-not-leak'
+      preview.profile.generation.executableDefaultMasterPlanPreview.internalSecret = 'preview-must-not-leak'
+      send(200, preview)
       return
     }
     send(404, null)
@@ -351,12 +510,14 @@ test('wizard baseline revision staging smoke reports sanitized preview readiness
 
   assert.equal(childResult.code, 1)
   const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'))
+  assert.match(report.error.message, /asset authority/u)
   assert.deepEqual(report.error.details.profileIssues, [{
     code: 'SCOPE_WBS_READINESS_MISSING',
     severity: 'blocking',
     details: {
       itemPackPattern: 'OUT-',
       matchMetadata: { physicalSpaceKind: 'outdoor_site' },
+      matchedStableCodes: ['OUT-01'],
       missingObjectLabel: 'outdoor site',
     },
   }])
@@ -370,6 +531,7 @@ test('wizard baseline revision staging smoke recovers and deletes a project when
   const companyId = '11111111-1111-4111-8111-111111111111'
   const createdProjectId = '22222222-2222-4222-8222-222222222222'
   const previewRequests = []
+  let wizardCreateRequest = null
   let project = null
   const server = http.createServer(async (req, res) => {
     const chunks = []
@@ -390,60 +552,7 @@ test('wizard baseline revision staging smoke recovers and deletes a project when
         candidate.businessType === requestBody.businessType
       ))
       assert.ok(previewCase, `unexpected preview business type: ${requestBody.businessType}`)
-      const businessMarkerCode = `${previewCase.markerPrefix}01`
-      send(200, {
-        estimatedRowCount: 120,
-        profile: {
-          identity: {
-            businessType: previewCase.businessType,
-            businessSubtype: previewCase.businessSubtype,
-          },
-          generation: {
-            masterPlanProfile: {
-              layer: 'master_plan',
-              rowCountRange: [60, 180],
-            },
-            executableDefaultMasterPlanAssembly: {
-              status: 'executable_default_master_plan_ready',
-              businessType: previewCase.businessType,
-              readyForWizardCommit: true,
-              scheduleRowCount: 120,
-              visibleDependencyCount: 119,
-              visibleDependencyCoverageRate: 0.99,
-              dependencyCycleRowCount: 0,
-              schedulePropagationCycleRowCount: 0,
-            },
-            executableDefaultMasterPlanPreview: {
-              status: 'executable_default_master_plan_ready',
-              businessType: previewCase.businessType,
-              readyForWizardCommit: true,
-              scheduleRowCount: 120,
-              visibleDependencyCount: 119,
-              dependencyCycleRowCount: 0,
-              schedulePropagationCycleRowCount: 0,
-              projectStartDate: '2026-08-01',
-              projectEndDate: '2027-08-01',
-              previewOnly: true,
-              mutationBoundary: 'preview_only_no_db_write',
-              rows: [{
-                clientRowId: `${previewCase.businessType}-marker`,
-                wbsCode: businessMarkerCode,
-                plannedStartDate: '2026-08-01',
-                plannedEndDate: '2026-08-15',
-                standardWorkDurationSeedStableCode: `${previewCase.businessType}-duration-seed`,
-                t2RhythmTemplateId: `${previewCase.businessType}-t2-rhythm-v1`,
-              }],
-            },
-            planQualityDiagnostics: {
-              status: 'ready',
-              readyForWizardCommit: true,
-              runtimeApprovalRequired: false,
-              blocksWizardCommit: false,
-              unresolvedDependencyCount: 0,
-            },
-          },
-        },
-      })
+      send(200, buildReadyPreviewResponse(previewCase))
       return
     }
     if (req.method === 'GET' && req.url === '/api/admin/duration-accuracy/summary') {
@@ -452,6 +561,7 @@ test('wizard baseline revision staging smoke recovers and deletes a project when
     }
     if (req.method === 'POST' && req.url === '/api/projects/wizard') {
       assert.equal(requestBody.newProjectId, createdProjectId)
+      wizardCreateRequest = requestBody
       setTimeout(() => {
         project = {
           id: createdProjectId,
@@ -531,11 +641,27 @@ test('wizard baseline revision staging smoke recovers and deletes a project when
   assert.equal(modularPreview.projectFeatures.standardFloorCount, 18)
 
   for (const previewRequest of previewRequests) {
+    const physicalZones = previewRequest.scopeTree.filter((node) => node.type === 'physical_zone')
+    assert.equal(physicalZones.some((node) => ['tower', 'basement'].includes(node.metadata.physicalCategory)), false, previewRequest.businessType)
+    assert.equal(physicalZones.every((node) => (
+      node.metadata.coverageRole === 'exclusive_scope'
+      && node.metadata.areaAccountingMode === 'counted'
+      && node.metadata.childrenComplete === true
+    )), true, previewRequest.businessType)
     const outdoorSite = previewRequest.scopeTree.find((node) => (
       node.type === 'physical_zone'
       && node.metadata.physicalSpaceKind === 'outdoor_site'
     ))
     assert.equal(outdoorSite?.metadata.physicalCategory, 'outdoor_site_plan', previewRequest.businessType)
+    assert.equal(previewRequest.scopeTree.filter((node) => node.type === 'building').every((node) => (
+      node.metadata.coverageRole === 'exclusive_scope'
+      && node.metadata.areaAccountingMode === 'counted'
+    )), true, previewRequest.businessType)
+    assert.equal(previewRequest.scopeTree.filter((node) => node.type === 'basement').every((node) => (
+      node.metadata.coverageRole === 'exclusive_scope'
+      && node.metadata.areaAccountingMode === 'counted'
+      && node.metadata.childrenComplete === true
+    )), true, previewRequest.businessType)
   }
 
   const hospitalPreview = previewByBusinessType.get('hospital')
@@ -553,6 +679,14 @@ test('wizard baseline revision staging smoke recovers and deletes a project when
       && node.metadata.physicalCategory === 'railway_operation_zone'
     )), businessType)
   }
+  assert.equal(wizardCreateRequest.wizardPayload.buildingCount, 1)
+  assert.equal(wizardCreateRequest.wizardPayload.projectFeatures.standardFloorCount, 22)
+  assert.equal(wizardCreateRequest.wizardPayload.scopeTree.filter((node) => node.type === 'building').length, 1)
+  assert.equal(wizardCreateRequest.wizardPayload.scopeTree.filter((node) => node.type === 'physical_zone').every((node) => (
+    node.metadata.coverageRole === 'exclusive_scope'
+    && node.metadata.areaAccountingMode === 'counted'
+    && node.metadata.childrenComplete === true
+  )), true)
   const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'))
   assert.equal(report.projectId, createdProjectId)
   assert.equal(report.steps.projectRecovery.status, 'pass')
@@ -560,6 +694,18 @@ test('wizard baseline revision staging smoke recovers and deletes a project when
   assert.equal(report.steps.durationAccuracyReadback.dataState, 'empty_no_completed_samples')
   assert.equal(report.steps.previewBusinessTypeMatrix.status, 'pass')
   assert.equal(report.steps.previewBusinessTypeMatrix.previewCount, 11)
+  assert.equal(report.steps.previewBusinessTypeMatrix.cases.every((previewCase) => (
+    previewCase.assetAuthority === 'system_standard_seed'
+    && previewCase.minimumScheduleRowCount === 60
+    && previewCase.assetInventoryShortfallAccepted === false
+    && previewCase.invalidDurationRowCount === 0
+    && previewCase.missingExecutionPhaseCount === 0
+    && previewCase.methodConflictCount === 0
+    && previewCase.durationAssetSemanticMismatchCount === 0
+    && previewCase.networkComponentCount === 1
+    && previewCase.networkRootCount === 1
+    && previewCase.networkSinkCount === 1
+  )), true)
   assert.equal(report.cleanup.status, 'pass')
   assert.equal(report.cleanup.projectPhysicallyDeleted, true)
   assert.equal(project, null)
@@ -621,59 +767,7 @@ test('ordinary staging user completes the full wizard and baseline smoke when ad
         candidate.businessType === requestBody.businessType
       ))
       assert.ok(previewCase, `unexpected preview business type: ${requestBody.businessType}`)
-      send(200, {
-        estimatedRowCount: 120,
-        profile: {
-          identity: {
-            businessType: previewCase.businessType,
-            businessSubtype: previewCase.businessSubtype,
-          },
-          generation: {
-            masterPlanProfile: {
-              layer: 'master_plan',
-              rowCountRange: [60, 180],
-            },
-            executableDefaultMasterPlanAssembly: {
-              status: 'executable_default_master_plan_ready',
-              businessType: previewCase.businessType,
-              readyForWizardCommit: true,
-              scheduleRowCount: 120,
-              visibleDependencyCount: 119,
-              visibleDependencyCoverageRate: 0.99,
-              dependencyCycleRowCount: 0,
-              schedulePropagationCycleRowCount: 0,
-            },
-            executableDefaultMasterPlanPreview: {
-              status: 'executable_default_master_plan_ready',
-              businessType: previewCase.businessType,
-              readyForWizardCommit: true,
-              scheduleRowCount: 120,
-              visibleDependencyCount: 119,
-              dependencyCycleRowCount: 0,
-              schedulePropagationCycleRowCount: 0,
-              projectStartDate: '2026-08-01',
-              projectEndDate: '2027-08-01',
-              previewOnly: true,
-              mutationBoundary: 'preview_only_no_db_write',
-              rows: [{
-                clientRowId: `${previewCase.businessType}-marker`,
-                wbsCode: `${previewCase.markerPrefix}01`,
-                plannedStartDate: '2026-08-01',
-                plannedEndDate: '2026-08-15',
-                standardWorkDurationSeedStableCode: `${previewCase.businessType}-duration-seed`,
-                t2RhythmTemplateId: `${previewCase.businessType}-t2-rhythm-v1`,
-              }],
-            },
-            planQualityDiagnostics: {
-              status: 'ready',
-              readyForWizardCommit: true,
-              runtimeApprovalRequired: false,
-              blocksWizardCommit: false,
-              unresolvedDependencyCount: 0,
-            },
-          },
-        },
-      })
+      send(200, buildReadyPreviewResponse(previewCase))
       return
     }
     if (req.method === 'POST' && requestUrl.pathname === '/api/projects/wizard') {

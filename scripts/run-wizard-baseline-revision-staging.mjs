@@ -157,7 +157,7 @@ const BUSINESS_TYPE_PREVIEW_CASES = [
     functionalUsageCodes: ['residential'],
     functionalCategoryCodes: ['residential'],
     specialRoomTypeCodes: [],
-    physicalZoneTypeCodes: ['tower', 'basement', 'outdoor_site'],
+    physicalZoneTypeCodes: ['outdoor_site'],
     methodVariantCodes: ['pile_foundation', 'vertical_retaining_support', 'no_horizontal_strut'],
     hardConstraintCodes: [],
     buildingCount: 3,
@@ -171,7 +171,7 @@ const BUSINESS_TYPE_PREVIEW_CASES = [
     functionalUsageCodes: ['hotel'],
     functionalCategoryCodes: ['hotel'],
     specialRoomTypeCodes: ['guestroom', 'lobby', 'kitchen'],
-    physicalZoneTypeCodes: ['tower', 'basement', 'podium', 'outdoor_site'],
+    physicalZoneTypeCodes: ['podium', 'outdoor_site'],
     methodVariantCodes: ['pile_foundation', 'vertical_retaining_support', 'no_horizontal_strut'],
     hardConstraintCodes: [],
     buildingCount: 1,
@@ -205,7 +205,7 @@ const BUSINESS_TYPE_PREVIEW_CASES = [
     functionalUsageCodes: ['school'],
     functionalCategoryCodes: ['education'],
     specialRoomTypeCodes: ['classroom', 'laboratory'],
-    physicalZoneTypeCodes: ['tower', 'basement', 'outdoor_site', 'playground'],
+    physicalZoneTypeCodes: ['outdoor_site', 'playground'],
     methodVariantCodes: ['pile_foundation', 'vertical_retaining_support', 'no_horizontal_strut'],
     hardConstraintCodes: [],
     buildingCount: 3,
@@ -219,7 +219,7 @@ const BUSINESS_TYPE_PREVIEW_CASES = [
     functionalUsageCodes: ['industrial'],
     functionalCategoryCodes: ['factory'],
     specialRoomTypeCodes: ['workshop', 'equipment_foundation'],
-    physicalZoneTypeCodes: ['tower', 'basement', 'outdoor_site', 'logistics_yard'],
+    physicalZoneTypeCodes: ['outdoor_site', 'logistics_yard'],
     methodVariantCodes: ['pile_foundation', 'steel_frame', 'industrial_superflat_floor'],
     hardConstraintCodes: [],
     buildingCount: 3,
@@ -261,7 +261,7 @@ const BUSINESS_TYPE_PREVIEW_CASES = [
     functionalUsageCodes: ['sports_culture'],
     functionalCategoryCodes: ['large_span_public'],
     specialRoomTypeCodes: ['arena', 'auditorium'],
-    physicalZoneTypeCodes: ['large_span_hall', 'basement', 'outdoor_site'],
+    physicalZoneTypeCodes: ['large_span_hall', 'outdoor_site'],
     methodVariantCodes: ['pile_foundation', 'steel_frame', 'large_span_roof'],
     hardConstraintCodes: [],
     buildingCount: 1,
@@ -303,7 +303,7 @@ const BUSINESS_TYPE_PREVIEW_CASES = [
     functionalUsageCodes: ['modular_building'],
     functionalCategoryCodes: ['modular_building'],
     specialRoomTypeCodes: [],
-    physicalZoneTypeCodes: ['tower', 'basement'],
+    physicalZoneTypeCodes: ['outdoor_site'],
     methodVariantCodes: ['modular_mic', 'modular_prefab', 'pile_foundation'],
     hardConstraintCodes: [],
     buildingCount: 3,
@@ -311,6 +311,13 @@ const BUSINESS_TYPE_PREVIEW_CASES = [
     basementLevelCount: 1,
   },
 ]
+
+const WIZARD_MUTATION_CASE = {
+  ...BUSINESS_TYPE_PREVIEW_CASES[0],
+  physicalZoneTypeCodes: ['tower', 'basement', 'outdoor_site'],
+  buildingCount: 1,
+  standardFloorCount: 22,
+}
 
 function buildPhysicalZoneMetadata(physicalCategory) {
   if (physicalCategory === 'outdoor_site') {
@@ -337,7 +344,8 @@ function buildPhysicalZoneMetadata(physicalCategory) {
   }
 }
 
-function buildBusinessPreviewScopeTree(previewCase, totalAreaM2, basementAreaM2) {
+function buildBusinessPreviewScopeTree(previewCase, totalAreaM2, basementAreaM2, options = {}) {
+  const canonicalScope = options.canonicalScope !== false
   const aboveGroundAreaM2 = totalAreaM2 - basementAreaM2
   const buildings = Array.from({ length: previewCase.buildingCount }, (_, index) => ({
     id: `${previewCase.businessType}-building-${index + 1}`,
@@ -349,6 +357,10 @@ function buildBusinessPreviewScopeTree(previewCase, totalAreaM2, basementAreaM2)
       areaM2: Math.round(aboveGroundAreaM2 / previewCase.buildingCount),
       methodVariantCodes: previewCase.methodVariantCodes,
       childrenComplete: true,
+      ...(canonicalScope ? {
+        coverageRole: 'exclusive_scope',
+        areaAccountingMode: 'counted',
+      } : {}),
     },
     children: [],
   }))
@@ -378,15 +390,19 @@ function buildBusinessPreviewScopeTree(previewCase, totalAreaM2, basementAreaM2)
       children: [],
     })),
   ]
-  const physicalCategories = [...new Set([...previewCase.physicalZoneTypeCodes, 'outdoor_site'])]
+  const physicalCategories = canonicalScope
+    ? [...new Set([...previewCase.physicalZoneTypeCodes, 'outdoor_site'])]
+      .filter((physicalCategory) => !['tower', 'basement'].includes(physicalCategory))
+    : previewCase.physicalZoneTypeCodes
   const physicalZones = physicalCategories.map((physicalCategory, index) => ({
     id: `${previewCase.businessType}-physical-zone-${index + 1}`,
     type: 'physical_zone',
     name: `${physicalCategory} zone`,
     metadata: {
-      ...buildPhysicalZoneMetadata(physicalCategory),
-      coverageRole: 'overlay_trigger',
-      areaAccountingMode: 'not_counted',
+      ...(canonicalScope ? buildPhysicalZoneMetadata(physicalCategory) : { physicalCategory }),
+      coverageRole: canonicalScope ? 'exclusive_scope' : 'overlay_trigger',
+      areaAccountingMode: canonicalScope ? 'counted' : 'not_counted',
+      ...(canonicalScope ? { childrenComplete: true } : {}),
     },
     children: [],
   }))
@@ -400,6 +416,10 @@ function buildBusinessPreviewScopeTree(previewCase, totalAreaM2, basementAreaM2)
           basementAreaM2,
           foundationDepthM: previewCase.basementLevelCount * 4.5,
           childrenComplete: true,
+          ...(canonicalScope ? {
+            coverageRole: 'exclusive_scope',
+            areaAccountingMode: 'counted',
+          } : {}),
         },
         children: [],
       }]
@@ -407,7 +427,11 @@ function buildBusinessPreviewScopeTree(previewCase, totalAreaM2, basementAreaM2)
   return [...buildings, ...basement, ...functionalAreas, ...physicalZones]
 }
 
-function buildBusinessPreviewPayload(previewCase, projectName = `${diagnosticProjectName} Preview ${previewCase.businessType}`) {
+function buildBusinessPreviewPayload(
+  previewCase,
+  projectName = `${diagnosticProjectName} Preview ${previewCase.businessType}`,
+  options = {},
+) {
   const totalAreaM2 = Math.max(18_000, previewCase.buildingCount * previewCase.standardFloorCount * 1_200)
   const basementAreaM2 = previewCase.basementLevelCount > 0
     ? Math.max(3_000, previewCase.buildingCount * previewCase.basementLevelCount * 1_000)
@@ -441,7 +465,7 @@ function buildBusinessPreviewPayload(previewCase, projectName = `${diagnosticPro
     methodVariantCodes: previewCase.methodVariantCodes,
     prefabSystemCodes: previewCase.businessType === 'modular_building' ? ['modular_mic'] : [],
     projectFeatures,
-    scopeTree: buildBusinessPreviewScopeTree(previewCase, totalAreaM2, basementAreaM2),
+    scopeTree: buildBusinessPreviewScopeTree(previewCase, totalAreaM2, basementAreaM2, options),
   }
 }
 
@@ -825,10 +849,24 @@ const PREVIEW_ISSUE_MATCH_METADATA_KEYS = [
 ]
 
 function sanitizePreviewIssueDetail(key, value) {
-  if (key !== 'matchMetadata' || !value || typeof value !== 'object') return value
-  return Object.fromEntries(PREVIEW_ISSUE_MATCH_METADATA_KEYS
-    .filter((metadataKey) => Object.prototype.hasOwnProperty.call(value, metadataKey))
-    .map((metadataKey) => [metadataKey, value[metadataKey]]))
+  if (key === 'matchMetadata') {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+    return Object.fromEntries(PREVIEW_ISSUE_MATCH_METADATA_KEYS
+      .filter((metadataKey) => Object.prototype.hasOwnProperty.call(value, metadataKey))
+      .map((metadataKey) => [metadataKey, value[metadataKey]])
+      .filter(([, metadataValue]) => ['string', 'number', 'boolean'].includes(typeof metadataValue)))
+  }
+  if (key === 'matchedStableCodes') {
+    if (!Array.isArray(value)) return undefined
+    return value
+      .filter((item) => typeof item === 'string')
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .slice(0, 20)
+  }
+  if (['string', 'number', 'boolean'].includes(typeof value)) return value
+  if (value === null) return null
+  return undefined
 }
 
 function sanitizePreviewIssues(issues) {
@@ -840,7 +878,8 @@ function sanitizePreviewIssues(issues) {
       : {}
     const details = Object.fromEntries(PREVIEW_ISSUE_DETAIL_KEYS
       .filter((key) => Object.prototype.hasOwnProperty.call(rawDetails, key))
-      .map((key) => [key, sanitizePreviewIssueDetail(key, rawDetails[key])]))
+      .map((key) => [key, sanitizePreviewIssueDetail(key, rawDetails[key])])
+      .filter(([, value]) => value !== undefined))
     return {
       code: String(issueRecord.code ?? '').trim() || 'UNKNOWN_PREVIEW_ISSUE',
       severity: String(issueRecord.severity ?? '').trim() || 'unknown',
@@ -866,18 +905,51 @@ function validateBusinessTypePreview(previewCase, preview, httpStatus) {
   const expectedSubtype = previewCase.businessSubtype ?? null
   const observedSubtype = identity.businessSubtype ?? null
   const profileIssues = sanitizePreviewIssues(preview?.profile?.issues)
+  const minimumScheduleRowCount = Number(assembly.minimumScheduleRowCount)
+  const operationalRowFloor = Number(assembly.operationalRowFloor)
+  const availableScheduleRowCount = Number(assembly.availableScheduleRowCount)
+  const missingExecutionPhases = Array.isArray(assembly.missingExecutionPhases)
+    ? assembly.missingExecutionPhases.map((value) => String(value ?? '').trim()).filter(Boolean)
+    : []
+  const readinessReasonCodes = Array.isArray(assembly.readinessReasonCodes)
+    ? assembly.readinessReasonCodes.map((value) => String(value ?? '').trim()).filter(Boolean)
+    : []
   const details = {
     businessType: previewCase.businessType,
     expectedSubtype,
-    identity,
-    masterPlanProfile,
-    assembly,
-    quality,
-    profileIssues,
-    executablePreview: {
-      ...executablePreview,
-      rows: undefined,
+    observedIdentity: {
+      businessType: identity.businessType ?? null,
+      businessSubtype: identity.businessSubtype ?? null,
     },
+    profileRowCountRange: profileRange,
+    assemblyStatus: assembly.status ?? null,
+    readyForWizardCommit: assembly.readyForWizardCommit ?? null,
+    assetAuthority: assembly.assetAuthority ?? null,
+    minimumScheduleRowCount,
+    operationalRowFloor,
+    availableScheduleRowCount,
+    assetInventoryShortfallAccepted: assembly.assetInventoryShortfallAccepted ?? null,
+    scheduleRowCount,
+    visibleDependencyCount,
+    visibleDependencyCoverageRate,
+    missingExecutionPhases,
+    invalidDurationRowCount: Number(assembly.invalidDurationRowCount ?? 0),
+    methodConflictCount: Number(assembly.methodConflictCount ?? 0),
+    durationAssetSemanticMismatchCount: Number(assembly.durationAssetSemanticMismatchCount ?? 0),
+    dependencyCycleRowCount: Number(assembly.dependencyCycleRowCount ?? executablePreview.dependencyCycleRowCount ?? 0),
+    schedulePropagationCycleRowCount: Number(assembly.schedulePropagationCycleRowCount ?? executablePreview.schedulePropagationCycleRowCount ?? 0),
+    networkComponentCount: Number(assembly.networkComponentCount),
+    networkRootCount: Number(assembly.networkRootCount),
+    networkSinkCount: Number(assembly.networkSinkCount),
+    readinessReasonCodes,
+    unresolvedDependencyCount: Number(quality.unresolvedDependencyCount ?? 0),
+    runtimeApprovalRequired: quality.runtimeApprovalRequired ?? null,
+    blocksWizardCommit: quality.blocksWizardCommit ?? null,
+    previewOnly: executablePreview.previewOnly ?? null,
+    mutationBoundary: executablePreview.mutationBoundary ?? null,
+    projectStartDate: executablePreview.projectStartDate ?? null,
+    projectEndDate: executablePreview.projectEndDate ?? null,
+    profileIssues,
   }
 
   assertPreviewCondition(httpStatus === 200, `${previewCase.businessType} preview did not return HTTP 200`, details)
@@ -885,11 +957,24 @@ function validateBusinessTypePreview(previewCase, preview, httpStatus) {
   assertPreviewCondition(observedSubtype === expectedSubtype, `${previewCase.businessType} preview returned a different canonical business subtype`, details)
   assertPreviewCondition(assembly.status === 'executable_default_master_plan_ready', `${previewCase.businessType} preview assembly is not ready`, details)
   assertPreviewCondition(assembly.readyForWizardCommit === true, `${previewCase.businessType} preview is not ready for wizard commit`, details)
+  assertPreviewCondition(assembly.assetAuthority === 'system_standard_seed', `${previewCase.businessType} preview asset authority is unavailable`, details)
   assertPreviewCondition(Number.isInteger(scheduleRowCount) && scheduleRowCount >= 60 && scheduleRowCount <= 300, `${previewCase.businessType} preview row count is outside 60-300`, details)
   assertPreviewCondition(profileRange.length === 2 && profileRange.every(Number.isFinite), `${previewCase.businessType} preview profile range is unavailable`, details)
   assertPreviewCondition(scheduleRowCount >= profileRange[0] && scheduleRowCount <= profileRange[1], `${previewCase.businessType} preview row count is outside its profile range`, details)
+  assertPreviewCondition(Number.isInteger(minimumScheduleRowCount) && scheduleRowCount >= minimumScheduleRowCount, `${previewCase.businessType} preview is below its governed minimum row count`, details)
+  assertPreviewCondition(Number.isInteger(operationalRowFloor) && scheduleRowCount >= operationalRowFloor, `${previewCase.businessType} preview is below its operational row floor`, details)
+  assertPreviewCondition(Number.isInteger(availableScheduleRowCount) && availableScheduleRowCount >= scheduleRowCount, `${previewCase.businessType} preview available row count is inconsistent`, details)
+  assertPreviewCondition(assembly.assetInventoryShortfallAccepted === false, `${previewCase.businessType} preview relies on an asset inventory shortfall`, details)
   assertPreviewCondition(Number.isFinite(visibleDependencyCount) && visibleDependencyCount > 0, `${previewCase.businessType} preview has no visible dependencies`, details)
   assertPreviewCondition(Number.isFinite(visibleDependencyCoverageRate) && visibleDependencyCoverageRate >= 0.9, `${previewCase.businessType} preview dependency coverage is below 0.9`, details)
+  assertPreviewCondition(missingExecutionPhases.length === 0, `${previewCase.businessType} preview is missing execution phase coverage`, details)
+  assertPreviewCondition(Number(assembly.invalidDurationRowCount ?? 0) === 0, `${previewCase.businessType} preview contains invalid durations`, details)
+  assertPreviewCondition(Number(assembly.methodConflictCount ?? 0) === 0, `${previewCase.businessType} preview contains method conflicts`, details)
+  assertPreviewCondition(Number(assembly.durationAssetSemanticMismatchCount ?? 0) === 0, `${previewCase.businessType} preview contains duration asset semantic mismatches`, details)
+  assertPreviewCondition(Number(assembly.networkComponentCount) === 1, `${previewCase.businessType} preview network is disconnected`, details)
+  assertPreviewCondition(Number(assembly.networkRootCount) === 1, `${previewCase.businessType} preview network root is not unique`, details)
+  assertPreviewCondition(Number(assembly.networkSinkCount) === 1, `${previewCase.businessType} preview network sink is not unique`, details)
+  assertPreviewCondition(readinessReasonCodes.length === 0, `${previewCase.businessType} preview has readiness blockers`, details)
   assertPreviewCondition(Number(quality.unresolvedDependencyCount ?? 0) === 0, `${previewCase.businessType} preview has unresolved dependencies`, details)
   assertPreviewCondition(Number(assembly.dependencyCycleRowCount ?? executablePreview.dependencyCycleRowCount ?? 0) === 0, `${previewCase.businessType} preview has dependency cycles`, details)
   assertPreviewCondition(Number(assembly.schedulePropagationCycleRowCount ?? executablePreview.schedulePropagationCycleRowCount ?? 0) === 0, `${previewCase.businessType} preview has schedule propagation cycles`, details)
@@ -920,8 +1005,20 @@ function validateBusinessTypePreview(previewCase, preview, httpStatus) {
     scheduleRowCount,
     assemblyStatus: assembly.status,
     readyForWizardCommit: assembly.readyForWizardCommit,
+    assetAuthority: assembly.assetAuthority,
+    minimumScheduleRowCount,
+    operationalRowFloor,
+    availableScheduleRowCount,
+    assetInventoryShortfallAccepted: assembly.assetInventoryShortfallAccepted,
     visibleDependencyCount,
     visibleDependencyCoverageRate,
+    missingExecutionPhaseCount: missingExecutionPhases.length,
+    invalidDurationRowCount: Number(assembly.invalidDurationRowCount ?? 0),
+    methodConflictCount: Number(assembly.methodConflictCount ?? 0),
+    durationAssetSemanticMismatchCount: Number(assembly.durationAssetSemanticMismatchCount ?? 0),
+    networkComponentCount: Number(assembly.networkComponentCount),
+    networkRootCount: Number(assembly.networkRootCount),
+    networkSinkCount: Number(assembly.networkSinkCount),
     unresolvedDependencyCount: Number(quality.unresolvedDependencyCount ?? 0),
     runtimeApprovalRequired: quality.runtimeApprovalRequired,
     blocksWizardCommit: quality.blocksWizardCommit,
@@ -935,7 +1032,11 @@ function validateBusinessTypePreview(previewCase, preview, httpStatus) {
   }
 }
 
-const wizardPayload = buildBusinessPreviewPayload(BUSINESS_TYPE_PREVIEW_CASES[0], diagnosticProjectName)
+const wizardPayload = buildBusinessPreviewPayload(
+  WIZARD_MUTATION_CASE,
+  diagnosticProjectName,
+  { canonicalScope: !productionLive },
+)
 
 try {
   await authenticate()
