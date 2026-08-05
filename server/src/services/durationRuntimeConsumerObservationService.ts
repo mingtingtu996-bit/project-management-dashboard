@@ -141,6 +141,7 @@ function normalizeRuntimeConsumerObservationSql(sql: string) {
   return sql.replace(/\s+/g, ' ').trim().toLowerCase()
 }
 
+// workspace-isolation-capability-read-approved: the adapter's only tenant lookup is the fixed project-to-company capability read below; all other accepted SQL shapes are immutable runtime-ledger writes.
 export function createDurationRuntimeConsumerObservationQueryExec(
   queryExec?: DurationRuntimeConsumerObservationQueryExec,
 ): DurationRuntimeConsumerObservationQueryExec {
