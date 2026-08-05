@@ -63,7 +63,16 @@ function apiFailure(label, response, body) {
   const code = body?.error?.code ?? body?.code ?? body?.error_code ?? body?.error ?? 'UNKNOWN'
   const message = body?.error?.message ?? body?.message ?? body?.error_description ?? body?.msg ?? 'request failed'
   const error = new Error(`${label} failed: HTTP ${response.status}, code=${code}, message=${message}`)
-  error.details = body?.error?.details ?? body?.details ?? null
+  const rawDetails = body?.error?.details ?? body?.details
+  const detailKeys = ['requestId', 'request_id', 'field', 'reason', 'resource', 'operation', 'constraint', 'retryable']
+  const safeDetails = rawDetails && typeof rawDetails === 'object' && !Array.isArray(rawDetails)
+    ? Object.fromEntries(detailKeys
+        .filter((key) => Object.prototype.hasOwnProperty.call(rawDetails, key))
+        .map((key) => [key, rawDetails[key]])
+        .filter(([, value]) => value === null || ['string', 'number', 'boolean'].includes(typeof value))
+        .map(([key, value]) => [key, typeof value === 'string' ? value.slice(0, 500) : value]))
+    : {}
+  error.details = Object.keys(safeDetails).length > 0 ? safeDetails : null
   return error
 }
 
@@ -888,6 +897,35 @@ function sanitizePreviewIssues(issues) {
   })
 }
 
+function readRequiredString(value) {
+  if (typeof value !== 'string') return null
+  const normalized = value.trim()
+  return normalized || null
+}
+
+function readRequiredBoolean(value) {
+  return typeof value === 'boolean' ? value : null
+}
+
+function readRequiredFiniteNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function readRequiredNonNegativeInteger(value) {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null
+}
+
+function readRequiredStringArray(value) {
+  if (!Array.isArray(value)) return null
+  const normalized = []
+  for (const item of value) {
+    const text = readRequiredString(item)
+    if (!text) return null
+    normalized.push(text)
+  }
+  return normalized
+}
+
 function validateBusinessTypePreview(previewCase, preview, httpStatus) {
   const identity = preview?.profile?.identity ?? {}
   const generation = preview?.profile?.generation ?? {}
@@ -895,107 +933,139 @@ function validateBusinessTypePreview(previewCase, preview, httpStatus) {
   const assembly = generation.executableDefaultMasterPlanAssembly ?? {}
   const executablePreview = generation.executableDefaultMasterPlanPreview ?? {}
   const quality = generation.planQualityDiagnostics ?? {}
-  const profileRange = Array.isArray(masterPlanProfile.rowCountRange)
-    ? masterPlanProfile.rowCountRange.map(Number)
+  const rawProfileRange = Array.isArray(masterPlanProfile.rowCountRange)
+    ? masterPlanProfile.rowCountRange.map(readRequiredNonNegativeInteger)
     : []
-  const scheduleRowCount = Number(executablePreview.scheduleRowCount ?? assembly.scheduleRowCount)
-  const visibleDependencyCount = Number(assembly.visibleDependencyCount ?? executablePreview.visibleDependencyCount)
-  const visibleDependencyCoverageRate = Number(assembly.visibleDependencyCoverageRate)
+  const profileRange = rawProfileRange.length === 2 && rawProfileRange.every((value) => value !== null && value > 0)
+    ? rawProfileRange
+    : []
+  const scheduleRowCount = readRequiredNonNegativeInteger(executablePreview.scheduleRowCount)
+  const assemblyScheduleRowCount = readRequiredNonNegativeInteger(assembly.scheduleRowCount)
+  const visibleDependencyCount = readRequiredNonNegativeInteger(assembly.visibleDependencyCount)
+  const visibleDependencyCoverageRate = readRequiredFiniteNumber(assembly.visibleDependencyCoverageRate)
   const rows = Array.isArray(executablePreview.rows) ? executablePreview.rows : []
   const expectedSubtype = previewCase.businessSubtype ?? null
-  const observedSubtype = identity.businessSubtype ?? null
+  const observedBusinessType = readRequiredString(identity.businessType)
+  const observedSubtype = identity.businessSubtype === null
+    ? null
+    : readRequiredString(identity.businessSubtype)
+  const observedSubtypeValid = expectedSubtype === null
+    ? identity.businessSubtype === null
+    : observedSubtype === expectedSubtype
   const profileIssues = sanitizePreviewIssues(preview?.profile?.issues)
-  const minimumScheduleRowCount = Number(assembly.minimumScheduleRowCount)
-  const operationalRowFloor = Number(assembly.operationalRowFloor)
-  const availableScheduleRowCount = Number(assembly.availableScheduleRowCount)
-  const missingExecutionPhases = Array.isArray(assembly.missingExecutionPhases)
-    ? assembly.missingExecutionPhases.map((value) => String(value ?? '').trim()).filter(Boolean)
-    : []
-  const readinessReasonCodes = Array.isArray(assembly.readinessReasonCodes)
-    ? assembly.readinessReasonCodes.map((value) => String(value ?? '').trim()).filter(Boolean)
-    : []
+  const assemblyStatus = readRequiredString(assembly.status)
+  const readyForWizardCommit = readRequiredBoolean(assembly.readyForWizardCommit)
+  const assetAuthority = readRequiredString(assembly.assetAuthority)
+  const minimumScheduleRowCount = readRequiredNonNegativeInteger(assembly.minimumScheduleRowCount)
+  const operationalRowFloor = readRequiredNonNegativeInteger(assembly.operationalRowFloor)
+  const availableScheduleRowCount = readRequiredNonNegativeInteger(assembly.availableScheduleRowCount)
+  const assetInventoryShortfallAccepted = readRequiredBoolean(assembly.assetInventoryShortfallAccepted)
+  const missingExecutionPhases = readRequiredStringArray(assembly.missingExecutionPhases)
+  const invalidDurationRowCount = readRequiredNonNegativeInteger(assembly.invalidDurationRowCount)
+  const methodConflictCount = readRequiredNonNegativeInteger(assembly.methodConflictCount)
+  const durationAssetSemanticMismatchCount = readRequiredNonNegativeInteger(assembly.durationAssetSemanticMismatchCount)
+  const dependencyCycleRowCount = readRequiredNonNegativeInteger(assembly.dependencyCycleRowCount)
+  const schedulePropagationCycleRowCount = readRequiredNonNegativeInteger(assembly.schedulePropagationCycleRowCount)
+  const networkComponentCount = readRequiredNonNegativeInteger(assembly.networkComponentCount)
+  const networkRootCount = readRequiredNonNegativeInteger(assembly.networkRootCount)
+  const networkSinkCount = readRequiredNonNegativeInteger(assembly.networkSinkCount)
+  const readinessReasonCodes = readRequiredStringArray(assembly.readinessReasonCodes)
+  const unresolvedDependencyCount = readRequiredNonNegativeInteger(quality.unresolvedDependencyCount)
+  const runtimeApprovalRequired = readRequiredBoolean(quality.runtimeApprovalRequired)
+  const blocksWizardCommit = readRequiredBoolean(quality.blocksWizardCommit)
+  const previewOnly = readRequiredBoolean(executablePreview.previewOnly)
+  const mutationBoundary = readRequiredString(executablePreview.mutationBoundary)
+  const projectStartDate = readRequiredString(executablePreview.projectStartDate)
+  const projectEndDate = readRequiredString(executablePreview.projectEndDate)
   const details = {
     businessType: previewCase.businessType,
     expectedSubtype,
     observedIdentity: {
-      businessType: identity.businessType ?? null,
-      businessSubtype: identity.businessSubtype ?? null,
+      businessType: observedBusinessType,
+      businessSubtype: observedSubtype,
     },
     profileRowCountRange: profileRange,
-    assemblyStatus: assembly.status ?? null,
-    readyForWizardCommit: assembly.readyForWizardCommit ?? null,
-    assetAuthority: assembly.assetAuthority ?? null,
+    assemblyStatus,
+    readyForWizardCommit,
+    assetAuthority,
     minimumScheduleRowCount,
     operationalRowFloor,
     availableScheduleRowCount,
-    assetInventoryShortfallAccepted: assembly.assetInventoryShortfallAccepted ?? null,
+    assetInventoryShortfallAccepted,
     scheduleRowCount,
+    assemblyScheduleRowCount,
     visibleDependencyCount,
     visibleDependencyCoverageRate,
     missingExecutionPhases,
-    invalidDurationRowCount: Number(assembly.invalidDurationRowCount ?? 0),
-    methodConflictCount: Number(assembly.methodConflictCount ?? 0),
-    durationAssetSemanticMismatchCount: Number(assembly.durationAssetSemanticMismatchCount ?? 0),
-    dependencyCycleRowCount: Number(assembly.dependencyCycleRowCount ?? executablePreview.dependencyCycleRowCount ?? 0),
-    schedulePropagationCycleRowCount: Number(assembly.schedulePropagationCycleRowCount ?? executablePreview.schedulePropagationCycleRowCount ?? 0),
-    networkComponentCount: Number(assembly.networkComponentCount),
-    networkRootCount: Number(assembly.networkRootCount),
-    networkSinkCount: Number(assembly.networkSinkCount),
+    invalidDurationRowCount,
+    methodConflictCount,
+    durationAssetSemanticMismatchCount,
+    dependencyCycleRowCount,
+    schedulePropagationCycleRowCount,
+    networkComponentCount,
+    networkRootCount,
+    networkSinkCount,
     readinessReasonCodes,
-    unresolvedDependencyCount: Number(quality.unresolvedDependencyCount ?? 0),
-    runtimeApprovalRequired: quality.runtimeApprovalRequired ?? null,
-    blocksWizardCommit: quality.blocksWizardCommit ?? null,
-    previewOnly: executablePreview.previewOnly ?? null,
-    mutationBoundary: executablePreview.mutationBoundary ?? null,
-    projectStartDate: executablePreview.projectStartDate ?? null,
-    projectEndDate: executablePreview.projectEndDate ?? null,
+    unresolvedDependencyCount,
+    runtimeApprovalRequired,
+    blocksWizardCommit,
+    previewOnly,
+    mutationBoundary,
+    projectStartDate,
+    projectEndDate,
     profileIssues,
   }
 
   assertPreviewCondition(httpStatus === 200, `${previewCase.businessType} preview did not return HTTP 200`, details)
-  assertPreviewCondition(identity.businessType === previewCase.businessType, `${previewCase.businessType} preview returned a different canonical business type`, details)
-  assertPreviewCondition(observedSubtype === expectedSubtype, `${previewCase.businessType} preview returned a different canonical business subtype`, details)
-  assertPreviewCondition(assembly.status === 'executable_default_master_plan_ready', `${previewCase.businessType} preview assembly is not ready`, details)
-  assertPreviewCondition(assembly.readyForWizardCommit === true, `${previewCase.businessType} preview is not ready for wizard commit`, details)
-  assertPreviewCondition(assembly.assetAuthority === 'system_standard_seed', `${previewCase.businessType} preview asset authority is unavailable`, details)
+  assertPreviewCondition(observedBusinessType === previewCase.businessType, `${previewCase.businessType} preview returned a different canonical business type`, details)
+  assertPreviewCondition(observedSubtypeValid, `${previewCase.businessType} preview returned a different canonical business subtype`, details)
+  assertPreviewCondition(assemblyStatus === 'executable_default_master_plan_ready', `${previewCase.businessType} preview assembly is not ready`, details)
+  assertPreviewCondition(readyForWizardCommit === true, `${previewCase.businessType} preview is not ready for wizard commit`, details)
+  assertPreviewCondition(assetAuthority === 'system_standard_seed', `${previewCase.businessType} preview asset authority is unavailable`, details)
   assertPreviewCondition(Number.isInteger(scheduleRowCount) && scheduleRowCount >= 60 && scheduleRowCount <= 300, `${previewCase.businessType} preview row count is outside 60-300`, details)
-  assertPreviewCondition(profileRange.length === 2 && profileRange.every(Number.isFinite), `${previewCase.businessType} preview profile range is unavailable`, details)
+  assertPreviewCondition(assemblyScheduleRowCount === scheduleRowCount, `${previewCase.businessType} preview assembly row count is inconsistent`, details)
+  assertPreviewCondition(profileRange.length === 2, `${previewCase.businessType} preview profile range is unavailable`, details)
   assertPreviewCondition(scheduleRowCount >= profileRange[0] && scheduleRowCount <= profileRange[1], `${previewCase.businessType} preview row count is outside its profile range`, details)
   assertPreviewCondition(Number.isInteger(minimumScheduleRowCount) && scheduleRowCount >= minimumScheduleRowCount, `${previewCase.businessType} preview is below its governed minimum row count`, details)
   assertPreviewCondition(Number.isInteger(operationalRowFloor) && scheduleRowCount >= operationalRowFloor, `${previewCase.businessType} preview is below its operational row floor`, details)
   assertPreviewCondition(Number.isInteger(availableScheduleRowCount) && availableScheduleRowCount >= scheduleRowCount, `${previewCase.businessType} preview available row count is inconsistent`, details)
-  assertPreviewCondition(assembly.assetInventoryShortfallAccepted === false, `${previewCase.businessType} preview relies on an asset inventory shortfall`, details)
+  assertPreviewCondition(assetInventoryShortfallAccepted === false, `${previewCase.businessType} preview relies on an asset inventory shortfall`, details)
   assertPreviewCondition(Number.isFinite(visibleDependencyCount) && visibleDependencyCount > 0, `${previewCase.businessType} preview has no visible dependencies`, details)
   assertPreviewCondition(Number.isFinite(visibleDependencyCoverageRate) && visibleDependencyCoverageRate >= 0.9, `${previewCase.businessType} preview dependency coverage is below 0.9`, details)
-  assertPreviewCondition(missingExecutionPhases.length === 0, `${previewCase.businessType} preview is missing execution phase coverage`, details)
-  assertPreviewCondition(Number(assembly.invalidDurationRowCount ?? 0) === 0, `${previewCase.businessType} preview contains invalid durations`, details)
-  assertPreviewCondition(Number(assembly.methodConflictCount ?? 0) === 0, `${previewCase.businessType} preview contains method conflicts`, details)
-  assertPreviewCondition(Number(assembly.durationAssetSemanticMismatchCount ?? 0) === 0, `${previewCase.businessType} preview contains duration asset semantic mismatches`, details)
-  assertPreviewCondition(Number(assembly.networkComponentCount) === 1, `${previewCase.businessType} preview network is disconnected`, details)
-  assertPreviewCondition(Number(assembly.networkRootCount) === 1, `${previewCase.businessType} preview network root is not unique`, details)
-  assertPreviewCondition(Number(assembly.networkSinkCount) === 1, `${previewCase.businessType} preview network sink is not unique`, details)
-  assertPreviewCondition(readinessReasonCodes.length === 0, `${previewCase.businessType} preview has readiness blockers`, details)
-  assertPreviewCondition(Number(quality.unresolvedDependencyCount ?? 0) === 0, `${previewCase.businessType} preview has unresolved dependencies`, details)
-  assertPreviewCondition(Number(assembly.dependencyCycleRowCount ?? executablePreview.dependencyCycleRowCount ?? 0) === 0, `${previewCase.businessType} preview has dependency cycles`, details)
-  assertPreviewCondition(Number(assembly.schedulePropagationCycleRowCount ?? executablePreview.schedulePropagationCycleRowCount ?? 0) === 0, `${previewCase.businessType} preview has schedule propagation cycles`, details)
-  assertPreviewCondition(quality.runtimeApprovalRequired === false, `${previewCase.businessType} preview unexpectedly requires runtime approval`, details)
-  assertPreviewCondition(quality.blocksWizardCommit === false, `${previewCase.businessType} preview blocks wizard commit`, details)
-  assertPreviewCondition(executablePreview.previewOnly === true, `${previewCase.businessType} response is not marked preview-only`, details)
-  assertPreviewCondition(executablePreview.mutationBoundary === 'preview_only_no_db_write', `${previewCase.businessType} response does not attest the preview mutation boundary`, details)
-  assertPreviewCondition(isValidIsoDate(executablePreview.projectStartDate) && isValidIsoDate(executablePreview.projectEndDate), `${previewCase.businessType} preview project dates are invalid`, details)
-  assertPreviewCondition(executablePreview.projectStartDate <= executablePreview.projectEndDate, `${previewCase.businessType} preview project dates are reversed`, details)
+  assertPreviewCondition(missingExecutionPhases !== null && missingExecutionPhases.length === 0, `${previewCase.businessType} preview is missing execution phase evidence or coverage`, details)
+  assertPreviewCondition(invalidDurationRowCount === 0, `${previewCase.businessType} preview contains invalid durations or missing evidence`, details)
+  assertPreviewCondition(methodConflictCount === 0, `${previewCase.businessType} preview contains method conflicts or missing evidence`, details)
+  assertPreviewCondition(durationAssetSemanticMismatchCount === 0, `${previewCase.businessType} preview contains duration asset semantic mismatches or missing evidence`, details)
+  assertPreviewCondition(networkComponentCount === 1, `${previewCase.businessType} preview network is disconnected`, details)
+  assertPreviewCondition(networkRootCount === 1, `${previewCase.businessType} preview network root is not unique`, details)
+  assertPreviewCondition(networkSinkCount === 1, `${previewCase.businessType} preview network sink is not unique`, details)
+  assertPreviewCondition(readinessReasonCodes !== null && readinessReasonCodes.length === 0, `${previewCase.businessType} preview has readiness blockers or missing evidence`, details)
+  assertPreviewCondition(unresolvedDependencyCount === 0, `${previewCase.businessType} preview has unresolved dependencies or missing evidence`, details)
+  assertPreviewCondition(dependencyCycleRowCount === 0, `${previewCase.businessType} preview has dependency cycles or missing evidence`, details)
+  assertPreviewCondition(schedulePropagationCycleRowCount === 0, `${previewCase.businessType} preview has schedule propagation cycles or missing evidence`, details)
+  assertPreviewCondition(runtimeApprovalRequired === false, `${previewCase.businessType} preview unexpectedly requires runtime approval`, details)
+  assertPreviewCondition(blocksWizardCommit === false, `${previewCase.businessType} preview blocks wizard commit`, details)
+  assertPreviewCondition(previewOnly === true, `${previewCase.businessType} response is not marked preview-only`, details)
+  assertPreviewCondition(mutationBoundary === 'preview_only_no_db_write', `${previewCase.businessType} response does not attest the preview mutation boundary`, details)
+  assertPreviewCondition(isValidIsoDate(projectStartDate) && isValidIsoDate(projectEndDate), `${previewCase.businessType} preview project dates are invalid`, details)
+  assertPreviewCondition(projectStartDate <= projectEndDate, `${previewCase.businessType} preview project dates are reversed`, details)
   assertPreviewCondition(rows.length > 0 && rows.every((row) => (
     isValidIsoDate(row.plannedStartDate)
     && isValidIsoDate(row.plannedEndDate)
     && row.plannedStartDate <= row.plannedEndDate
   )), `${previewCase.businessType} preview contains an invalid row date`, details)
 
-  const businessMarkerRow = rows.find((row) => (
-    String(row.wbsCode ?? '').startsWith(previewCase.markerPrefix)
-    && String(row.standardWorkDurationSeedStableCode ?? '').trim()
-    && String(row.t2RhythmTemplateId ?? '').trim()
-  ))
-  assertPreviewCondition(Boolean(businessMarkerRow), `${previewCase.businessType} preview did not consume its business marker, T2 rhythm, and duration seed together`, details)
+  const businessMarkerEvidence = rows.reduce((match, row) => {
+    if (match) return match
+    const wbsCode = readRequiredString(row?.wbsCode)
+    const standardWorkDurationSeedStableCode = readRequiredString(row?.standardWorkDurationSeedStableCode)
+    const t2RhythmTemplateId = readRequiredString(row?.t2RhythmTemplateId)
+    if (!wbsCode?.startsWith(previewCase.markerPrefix) || !standardWorkDurationSeedStableCode || !t2RhythmTemplateId) {
+      return null
+    }
+    return { wbsCode, standardWorkDurationSeedStableCode, t2RhythmTemplateId }
+  }, null)
+  assertPreviewCondition(Boolean(businessMarkerEvidence), `${previewCase.businessType} preview did not consume its business marker, T2 rhythm, and duration seed together`, details)
 
   return {
     businessType: previewCase.businessType,
@@ -1003,32 +1073,32 @@ function validateBusinessTypePreview(previewCase, preview, httpStatus) {
     httpStatus,
     profileRowCountRange: profileRange,
     scheduleRowCount,
-    assemblyStatus: assembly.status,
-    readyForWizardCommit: assembly.readyForWizardCommit,
-    assetAuthority: assembly.assetAuthority,
+    assemblyStatus,
+    readyForWizardCommit,
+    assetAuthority,
     minimumScheduleRowCount,
     operationalRowFloor,
     availableScheduleRowCount,
-    assetInventoryShortfallAccepted: assembly.assetInventoryShortfallAccepted,
+    assetInventoryShortfallAccepted,
     visibleDependencyCount,
     visibleDependencyCoverageRate,
     missingExecutionPhaseCount: missingExecutionPhases.length,
-    invalidDurationRowCount: Number(assembly.invalidDurationRowCount ?? 0),
-    methodConflictCount: Number(assembly.methodConflictCount ?? 0),
-    durationAssetSemanticMismatchCount: Number(assembly.durationAssetSemanticMismatchCount ?? 0),
-    networkComponentCount: Number(assembly.networkComponentCount),
-    networkRootCount: Number(assembly.networkRootCount),
-    networkSinkCount: Number(assembly.networkSinkCount),
-    unresolvedDependencyCount: Number(quality.unresolvedDependencyCount ?? 0),
-    runtimeApprovalRequired: quality.runtimeApprovalRequired,
-    blocksWizardCommit: quality.blocksWizardCommit,
-    projectStartDate: executablePreview.projectStartDate,
-    projectEndDate: executablePreview.projectEndDate,
-    businessMarkerCode: businessMarkerRow.wbsCode,
-    standardWorkDurationSeedStableCode: businessMarkerRow.standardWorkDurationSeedStableCode,
-    t2RhythmTemplateId: businessMarkerRow.t2RhythmTemplateId,
-    previewOnly: executablePreview.previewOnly,
-    mutationBoundary: executablePreview.mutationBoundary,
+    invalidDurationRowCount,
+    methodConflictCount,
+    durationAssetSemanticMismatchCount,
+    networkComponentCount,
+    networkRootCount,
+    networkSinkCount,
+    unresolvedDependencyCount,
+    runtimeApprovalRequired,
+    blocksWizardCommit,
+    projectStartDate,
+    projectEndDate,
+    businessMarkerCode: businessMarkerEvidence.wbsCode,
+    standardWorkDurationSeedStableCode: businessMarkerEvidence.standardWorkDurationSeedStableCode,
+    t2RhythmTemplateId: businessMarkerEvidence.t2RhythmTemplateId,
+    previewOnly,
+    mutationBoundary,
   }
 }
 
