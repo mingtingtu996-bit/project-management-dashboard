@@ -160,8 +160,8 @@ const BUSINESS_TYPE_PREVIEW_CASES = [
     physicalZoneTypeCodes: ['tower', 'basement', 'outdoor_site'],
     methodVariantCodes: ['pile_foundation', 'vertical_retaining_support', 'no_horizontal_strut'],
     hardConstraintCodes: [],
-    buildingCount: 1,
-    standardFloorCount: 22,
+    buildingCount: 3,
+    standardFloorCount: 24,
     basementLevelCount: 2,
   },
   {
@@ -182,10 +182,16 @@ const BUSINESS_TYPE_PREVIEW_CASES = [
     businessType: 'hospital',
     businessSubtype: null,
     markerPrefix: 'BTMP-HSP-',
-    functionalUsageCodes: ['hospital'],
-    functionalCategoryCodes: ['cleanroom'],
+    functionalUsageCodes: ['医技楼', '住院楼', '门诊楼', '综合楼'],
+    functionalCategoryCodes: ['手术区'],
     specialRoomTypeCodes: ['cleanroom', 'operating_room'],
-    physicalZoneTypeCodes: ['tower', 'basement'],
+    physicalZoneTypeCodes: [
+      'liquid_oxygen_station',
+      'sewage_treatment_station',
+      'hyperbaric_oxygen_chamber',
+      'medical_waste_holding',
+      'outdoor_site',
+    ],
     methodVariantCodes: ['pile_foundation', 'vertical_retaining_support', 'no_horizontal_strut'],
     hardConstraintCodes: [],
     buildingCount: 4,
@@ -224,10 +230,10 @@ const BUSINESS_TYPE_PREVIEW_CASES = [
     businessType: 'data_center',
     businessSubtype: null,
     markerPrefix: 'BTMP-DTC-',
-    functionalUsageCodes: ['data_center'],
+    functionalUsageCodes: ['机房楼', '运维楼'],
     functionalCategoryCodes: ['data_center'],
     specialRoomTypeCodes: ['computer_room', 'battery_room'],
-    physicalZoneTypeCodes: ['tower', 'basement'],
+    physicalZoneTypeCodes: ['substation', 'generator_yard', 'cooling_plant', 'outdoor_site'],
     methodVariantCodes: ['pile_foundation', 'steel_frame', 'no_horizontal_strut'],
     hardConstraintCodes: [],
     buildingCount: 2,
@@ -241,7 +247,7 @@ const BUSINESS_TYPE_PREVIEW_CASES = [
     functionalUsageCodes: ['transportation_hub'],
     functionalCategoryCodes: ['transportation'],
     specialRoomTypeCodes: ['concourse', 'platform_interface'],
-    physicalZoneTypeCodes: ['tower', 'basement', 'metro_interface', 'outdoor_site'],
+    physicalZoneTypeCodes: ['railway_operation_zone', 'transfer_passage', 'traffic_connection_zone', 'outdoor_site'],
     methodVariantCodes: ['pile_foundation', 'steel_frame', 'no_horizontal_strut'],
     hardConstraintCodes: ['non_stop_operation'],
     buildingCount: 1,
@@ -266,10 +272,10 @@ const BUSINESS_TYPE_PREVIEW_CASES = [
     businessType: 'tod_upper_cover',
     businessSubtype: null,
     markerPrefix: 'BTMP-TOD-',
-    functionalUsageCodes: ['tod_upper_cover'],
+    functionalUsageCodes: ['转换层', '上盖塔楼'],
     functionalCategoryCodes: ['tod'],
     specialRoomTypeCodes: ['podium', 'metro_interface'],
-    physicalZoneTypeCodes: ['tower', 'basement', 'metro_interface', 'outdoor_site'],
+    physicalZoneTypeCodes: ['railway_operation_zone', 'transfer_passage', 'traffic_connection_zone', 'outdoor_site'],
     methodVariantCodes: ['pile_foundation', 'steel_frame', 'no_horizontal_strut'],
     hardConstraintCodes: ['non_stop_operation'],
     buildingCount: 2,
@@ -286,8 +292,8 @@ const BUSINESS_TYPE_PREVIEW_CASES = [
     physicalZoneTypeCodes: ['renovation_zone', 'outdoor_site'],
     methodVariantCodes: ['cast_in_situ', 'vertical_retaining_support'],
     hardConstraintCodes: ['occupied_renovation'],
-    buildingCount: 1,
-    standardFloorCount: 6,
+    buildingCount: 2,
+    standardFloorCount: 8,
     basementLevelCount: 1,
   },
   {
@@ -300,11 +306,36 @@ const BUSINESS_TYPE_PREVIEW_CASES = [
     physicalZoneTypeCodes: ['tower', 'basement'],
     methodVariantCodes: ['modular_mic', 'modular_prefab', 'pile_foundation'],
     hardConstraintCodes: [],
-    buildingCount: 1,
+    buildingCount: 3,
     standardFloorCount: 18,
     basementLevelCount: 1,
   },
 ]
+
+function buildPhysicalZoneMetadata(physicalCategory) {
+  if (physicalCategory === 'outdoor_site') {
+    return {
+      physicalSpaceKind: 'outdoor_site',
+      physicalCategory: 'outdoor_site_plan',
+    }
+  }
+  if (physicalCategory === 'podium') {
+    return {
+      physicalSpaceKind: 'shared_podium',
+      physicalCategory: 'shared_podium',
+      structuralRole: 'podium',
+      sharedScopeCandidate: true,
+    }
+  }
+  if (physicalCategory === 'tower') {
+    return { physicalCategory, structuralRole: 'tower' }
+  }
+  if (physicalCategory === 'basement') return { physicalCategory }
+  return {
+    physicalSpaceKind: 'independent_engineering_zone',
+    physicalCategory,
+  }
+}
 
 function buildBusinessPreviewScopeTree(previewCase, totalAreaM2, basementAreaM2) {
   const aboveGroundAreaM2 = totalAreaM2 - basementAreaM2
@@ -347,12 +378,13 @@ function buildBusinessPreviewScopeTree(previewCase, totalAreaM2, basementAreaM2)
       children: [],
     })),
   ]
-  const physicalZones = previewCase.physicalZoneTypeCodes.map((physicalCategory, index) => ({
+  const physicalCategories = [...new Set([...previewCase.physicalZoneTypeCodes, 'outdoor_site'])]
+  const physicalZones = physicalCategories.map((physicalCategory, index) => ({
     id: `${previewCase.businessType}-physical-zone-${index + 1}`,
     type: 'physical_zone',
     name: `${physicalCategory} zone`,
     metadata: {
-      physicalCategory,
+      ...buildPhysicalZoneMetadata(physicalCategory),
       coverageRole: 'overlay_trigger',
       areaAccountingMode: 'not_counted',
     },
@@ -769,6 +801,54 @@ function assertPreviewCondition(condition, message, details) {
   throw error
 }
 
+const PREVIEW_ISSUE_DETAIL_KEYS = [
+  'itemPackPattern',
+  'effect',
+  'targetObjectType',
+  'matchMetadata',
+  'matchObjectName',
+  'missingObjectLabel',
+  'matchedRowCount',
+  'matchedStableCodes',
+  'preflight',
+  'directlyTriggered',
+  'triggeredByTemplateId',
+  'nodeCode',
+]
+const PREVIEW_ISSUE_MATCH_METADATA_KEYS = [
+  'physicalSpaceKind',
+  'physicalCategory',
+  'floorUsage',
+  'functionalCategory',
+  'functionalUsage',
+  'structuralRole',
+]
+
+function sanitizePreviewIssueDetail(key, value) {
+  if (key !== 'matchMetadata' || !value || typeof value !== 'object') return value
+  return Object.fromEntries(PREVIEW_ISSUE_MATCH_METADATA_KEYS
+    .filter((metadataKey) => Object.prototype.hasOwnProperty.call(value, metadataKey))
+    .map((metadataKey) => [metadataKey, value[metadataKey]]))
+}
+
+function sanitizePreviewIssues(issues) {
+  if (!Array.isArray(issues)) return []
+  return issues.map((issue) => {
+    const issueRecord = issue && typeof issue === 'object' ? issue : {}
+    const rawDetails = issueRecord.details && typeof issueRecord.details === 'object'
+      ? issueRecord.details
+      : {}
+    const details = Object.fromEntries(PREVIEW_ISSUE_DETAIL_KEYS
+      .filter((key) => Object.prototype.hasOwnProperty.call(rawDetails, key))
+      .map((key) => [key, sanitizePreviewIssueDetail(key, rawDetails[key])]))
+    return {
+      code: String(issueRecord.code ?? '').trim() || 'UNKNOWN_PREVIEW_ISSUE',
+      severity: String(issueRecord.severity ?? '').trim() || 'unknown',
+      details: Object.keys(details).length > 0 ? details : null,
+    }
+  })
+}
+
 function validateBusinessTypePreview(previewCase, preview, httpStatus) {
   const identity = preview?.profile?.identity ?? {}
   const generation = preview?.profile?.generation ?? {}
@@ -785,6 +865,7 @@ function validateBusinessTypePreview(previewCase, preview, httpStatus) {
   const rows = Array.isArray(executablePreview.rows) ? executablePreview.rows : []
   const expectedSubtype = previewCase.businessSubtype ?? null
   const observedSubtype = identity.businessSubtype ?? null
+  const profileIssues = sanitizePreviewIssues(preview?.profile?.issues)
   const details = {
     businessType: previewCase.businessType,
     expectedSubtype,
@@ -792,6 +873,7 @@ function validateBusinessTypePreview(previewCase, preview, httpStatus) {
     masterPlanProfile,
     assembly,
     quality,
+    profileIssues,
     executablePreview: {
       ...executablePreview,
       rows: undefined,

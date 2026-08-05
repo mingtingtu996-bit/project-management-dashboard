@@ -268,6 +268,101 @@ test('wizard baseline revision staging smoke previews all 11 canonical business 
   assert.equal(smokeSource.includes("businessSubtype: 'high_rise_residential'"), false)
 })
 
+test('wizard baseline revision staging smoke reports sanitized preview readiness issues', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wizard-preview-readiness-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+
+  const companyId = '11111111-1111-4111-8111-111111111111'
+  const server = http.createServer(async (req, res) => {
+    for await (const _chunk of req) {
+      // Drain request bodies so spawned clients can reuse the connection cleanly.
+    }
+    const send = (status, data) => {
+      res.writeHead(status, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ success: status < 400, data }))
+    }
+
+    if (req.method === 'POST' && req.url === '/api/auth/login') {
+      send(200, { token: 'test-token', user: { currentCompanyId: companyId } })
+      return
+    }
+    if (req.method === 'GET' && req.url === '/api/admin/duration-accuracy/summary') {
+      send(200, { metrics: [] })
+      return
+    }
+    if (req.method === 'POST' && req.url === '/api/projects/wizard/preview') {
+      send(200, {
+        profile: {
+          identity: { businessType: 'general_civil', businessSubtype: 'civil_residential' },
+          issues: [{
+            code: 'SCOPE_WBS_READINESS_MISSING',
+            severity: 'blocking',
+            details: {
+              itemPackPattern: 'OUT-',
+              matchMetadata: {
+                physicalSpaceKind: 'outdoor_site',
+                internalSecret: 'nested-must-not-leak',
+              },
+              missingObjectLabel: 'outdoor site',
+              internalSecret: 'must-not-leak',
+            },
+          }],
+          generation: {
+            masterPlanProfile: { rowCountRange: [78, 176] },
+            executableDefaultMasterPlanAssembly: {
+              status: 'executable_default_master_plan_blocked',
+              readyForWizardCommit: false,
+            },
+            planQualityDiagnostics: { status: 'blocked', blocksWizardCommit: true },
+          },
+        },
+      })
+      return
+    }
+    send(404, null)
+  })
+  t.after(() => new Promise((resolveClose) => server.close(resolveClose)))
+  await new Promise((resolveListen) => server.listen(0, '127.0.0.1', resolveListen))
+  const address = server.address()
+  assert.equal(typeof address, 'object')
+
+  const envPath = path.join(root, 'staging.env')
+  const reportPath = path.join(root, 'report.json')
+  fs.writeFileSync(envPath, [
+    'SUPABASE_URL=https://stagingref.supabase.co',
+    'TEST_USERNAME=smoke@example.com',
+    'TEST_USER_PASSWORD=test-password',
+    '',
+  ].join('\n'))
+
+  const childResult = await new Promise((resolveChild, rejectChild) => {
+    const child = spawn(process.execPath, [
+      smokeScriptPath,
+      '--env-file', envPath,
+      '--api-base-url', `http://127.0.0.1:${address.port}`,
+      '--public-origin', 'https://workbuddy.example.com',
+      '--report', reportPath,
+    ], { cwd: workspaceRoot })
+    let stderr = ''
+    child.stderr.on('data', (chunk) => { stderr += chunk })
+    child.once('error', rejectChild)
+    child.once('close', (code) => resolveChild({ code, stderr }))
+  })
+
+  assert.equal(childResult.code, 1)
+  const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'))
+  assert.deepEqual(report.error.details.profileIssues, [{
+    code: 'SCOPE_WBS_READINESS_MISSING',
+    severity: 'blocking',
+    details: {
+      itemPackPattern: 'OUT-',
+      matchMetadata: { physicalSpaceKind: 'outdoor_site' },
+      missingObjectLabel: 'outdoor site',
+    },
+  }])
+  assert.equal(JSON.stringify(report.error.details).includes('must-not-leak'), false)
+})
+
 test('wizard baseline revision staging smoke recovers and deletes a project when create commits before the response times out', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wizard-timeout-recovery-'))
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))
@@ -421,6 +516,43 @@ test('wizard baseline revision staging smoke recovers and deletes a project when
     previewRequests.map(({ businessType, businessSubtype = null }) => ({ businessType, businessSubtype })),
     canonicalBusinessPreviewCases.map(({ businessType, businessSubtype }) => ({ businessType, businessSubtype })),
   )
+  const previewByBusinessType = new Map(previewRequests.map((request) => [request.businessType, request]))
+  const generalCivilPreview = previewByBusinessType.get('general_civil')
+  assert.equal(generalCivilPreview.buildingCount, 3)
+  assert.equal(generalCivilPreview.projectFeatures.standardFloorCount, 24)
+  assert.equal(generalCivilPreview.scopeTree.filter((node) => node.type === 'building').length, 3)
+
+  const renovationPreview = previewByBusinessType.get('renovation')
+  assert.equal(renovationPreview.buildingCount, 2)
+  assert.equal(renovationPreview.projectFeatures.standardFloorCount, 8)
+
+  const modularPreview = previewByBusinessType.get('modular_building')
+  assert.equal(modularPreview.buildingCount, 3)
+  assert.equal(modularPreview.projectFeatures.standardFloorCount, 18)
+
+  for (const previewRequest of previewRequests) {
+    const outdoorSite = previewRequest.scopeTree.find((node) => (
+      node.type === 'physical_zone'
+      && node.metadata.physicalSpaceKind === 'outdoor_site'
+    ))
+    assert.equal(outdoorSite?.metadata.physicalCategory, 'outdoor_site_plan', previewRequest.businessType)
+  }
+
+  const hospitalPreview = previewByBusinessType.get('hospital')
+  assert.ok(hospitalPreview.scopeTree.some((node) => node.type === 'building' && node.metadata.functionalUsage === '医技楼'))
+  assert.ok(hospitalPreview.scopeTree.some((node) => node.type === 'functional_area' && node.metadata.functionalCategory === '手术区'))
+
+  const dataCenterPreview = previewByBusinessType.get('data_center')
+  assert.ok(dataCenterPreview.scopeTree.some((node) => node.type === 'building' && node.metadata.functionalUsage === '机房楼'))
+
+  for (const businessType of ['transportation_hub', 'tod_upper_cover']) {
+    const previewRequest = previewByBusinessType.get(businessType)
+    assert.ok(previewRequest.scopeTree.some((node) => (
+      node.type === 'physical_zone'
+      && node.metadata.physicalSpaceKind === 'independent_engineering_zone'
+      && node.metadata.physicalCategory === 'railway_operation_zone'
+    )), businessType)
+  }
   const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'))
   assert.equal(report.projectId, createdProjectId)
   assert.equal(report.steps.projectRecovery.status, 'pass')
