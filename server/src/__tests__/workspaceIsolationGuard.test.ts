@@ -195,6 +195,21 @@ describe('workspace isolation guard', () => {
     expect(evaluateWorkspaceIsolationGuard(root).violations).toEqual([])
   })
 
+  it('allows explicitly reviewed fixed capability reads in service functions', () => {
+    const root = makeFixture({
+      'empty.ts': `import { Router } from 'express'; export default Router()`,
+      'services/project-capability.ts': `
+        import { executeSQL } from './dbService.js'
+        // workspace-isolation-capability-read-approved: this fixed lookup resolves a project's owning company before downstream scoped reads.
+        export async function resolveProjectCompany(lookupKey: string) {
+          return executeSQL('SELECT company_id FROM public.projects WHERE id = $1::uuid LIMIT 1', [lookupKey])
+        }
+      `,
+    })
+
+    expect(evaluateWorkspaceIsolationGuard(root).violations).toEqual([])
+  })
+
   it('allows an explicitly reviewed capability write such as accepting an invitation', () => {
     const root = makeFixture({
       'capability-write.ts': `
