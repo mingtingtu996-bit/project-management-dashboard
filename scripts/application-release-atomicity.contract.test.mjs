@@ -280,6 +280,7 @@ test('deployment promotes the tested server build without compiling TypeScript o
   assert.equal(serverStamp.env.RELEASE_SHA, '${{ github.sha }}')
   assert.match(serverStamp.run, /workbuddy-server-build\.json/u)
   assert.match(serverStamp.run, /process\.env\.RELEASE_SHA/u)
+  assert.match(serverStamp.run, /releaseSha\s*:\s*process\.env\.RELEASE_SHA/u)
   assert.deepEqual(serverSteps[serverUploadIndex].with, {
     name: 'server-build',
     path: 'server/dist',
@@ -291,12 +292,23 @@ test('deployment promotes the tested server build without compiling TypeScript o
   const deploySteps = deployJob.steps
   assert.ok(deployJob.needs.includes('server-quality'))
   assert.match(deployJob.if, /needs\.server-quality\.result == 'success'/u)
-  const serverDownload = deploySteps.find((step) => step.name === 'Download tested server build')
+  const serverDownloadIndex = deploySteps.findIndex(
+    (step) => step.name === 'Download tested server build',
+  )
+  const remoteDeployIndex = deploySteps.findIndex(
+    (step) => step.name === 'Deploy to self-hosted server',
+  )
+  const serverDownload = deploySteps[serverDownloadIndex]
+  assert.ok(serverDownloadIndex >= 0, 'tested server artifact download is required')
+  assert.ok(
+    serverDownloadIndex < remoteDeployIndex,
+    'tested server artifact must be downloaded before the remote deploy step',
+  )
   assert.deepEqual(serverDownload?.with, {
     name: 'server-build',
     path: 'server/dist',
   })
-  const remoteDeploy = deploySteps.find((step) => step.name === 'Deploy to self-hosted server')
+  const remoteDeploy = deploySteps[remoteDeployIndex]
   const remoteDeployRun = remoteDeploy?.run ?? ''
   const serverArtifactCopyIndex = remoteDeployRun.indexOf('cp -a server/dist/. "$RELEASE_DIR/server/dist/"')
   const releaseArchiveIndex = remoteDeployRun.indexOf('tar -czf "$RELEASE_ARCHIVE"')
@@ -391,6 +403,8 @@ set_release_contract "$candidate" ${candidateSha} require_prebuilt
 rm "$candidate/server/dist/workbuddy-server-build.json"
 if set_release_contract "$candidate" ${candidateSha} require_prebuilt; then exit 92; fi
 if set_release_contract "$candidate" ${candidateSha} allow_legacy_source; then exit 93; fi
+printf '{"releaseSha":"%s"}\n' ${'8'.repeat(40)} > "$candidate/server/dist/workbuddy-server-build.json"
+if set_release_contract "$candidate" ${candidateSha} require_prebuilt; then exit 94; fi
 `)
 
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
