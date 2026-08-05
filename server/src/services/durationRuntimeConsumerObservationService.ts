@@ -148,7 +148,7 @@ export function createDurationRuntimeConsumerObservationQueryExec(
 
   const executeQuery: DurationRuntimeConsumerObservationQueryExec = queryExec
     ?? (async <T = Record<string, unknown>>(sql: string, params: unknown[] = []) => {
-      // database-query-dynamic-approved: this adapter receives only the two exact, normalized ledger INSERT shapes approved below.
+      // database-query-dynamic-approved: this adapter receives only the exact normalized read/ledger shapes approved below.
       const result = await rawQuery(sql, params as any[])
       return result.rows as T[]
     })
@@ -158,6 +158,18 @@ export function createDurationRuntimeConsumerObservationQueryExec(
     params: unknown[] = [],
   ) => {
     const normalized = normalizeRuntimeConsumerObservationSql(sql)
+
+    if (normalized === normalizeRuntimeConsumerObservationSql(`
+      select company_id
+        from public.projects
+       where id = $1::uuid
+       limit 1
+    `)) {
+      return executeQuery<T>(
+        'select company_id from public.projects where id = $1::uuid limit 1',
+        params,
+      )
+    }
 
     if (normalized === normalizeRuntimeConsumerObservationSql(`
       insert into public.runtime_consumer_runtime_calls (
