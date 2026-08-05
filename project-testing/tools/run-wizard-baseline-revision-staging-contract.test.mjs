@@ -29,8 +29,10 @@ const canonicalBusinessPreviewCases = [
   { businessType: 'modular_building', businessSubtype: null, markerPrefix: 'BTMP-MOD-', rowCountRange: [67, 126], operationalRowFloor: 60 },
 ]
 
-function buildReadyPreviewResponse(previewCase) {
-  const scheduleRowCount = previewCase.rowCountRange[0]
+function buildReadyPreviewResponse(previewCase, options = {}) {
+  const scheduleRowCount = options.scheduleRowCount ?? previewCase.rowCountRange[0]
+  const minimumScheduleRowCount = options.minimumScheduleRowCount ?? scheduleRowCount
+  const availableScheduleRowCount = options.availableScheduleRowCount ?? scheduleRowCount
   const rows = Array.from({ length: scheduleRowCount }, (_, index) => ({
     clientRowId: `${previewCase.businessType}-row-${index + 1}`,
     wbsCode: index === 0
@@ -60,9 +62,9 @@ function buildReadyPreviewResponse(previewCase) {
           readyForWizardCommit: true,
           assetAuthority: 'system_standard_seed',
           scheduleRowCount,
-          minimumScheduleRowCount: scheduleRowCount,
+          minimumScheduleRowCount,
           operationalRowFloor: previewCase.operationalRowFloor,
-          availableScheduleRowCount: scheduleRowCount,
+          availableScheduleRowCount,
           assetInventoryShortfallAccepted: false,
           visibleDependencyCount: scheduleRowCount - 1,
           visibleDependencyCoverageRate: 0.99,
@@ -587,6 +589,29 @@ test('wizard baseline revision staging smoke fails closed when governed preview 
 
   const scenarios = [
     {
+      name: 'above-profile-maximum',
+      mutate: (preview) => {
+        const generation = preview.profile.generation
+        const scheduleRowCount = generation.masterPlanProfile.rowCountRange[1] + 1
+        generation.executableDefaultMasterPlanAssembly.scheduleRowCount = scheduleRowCount
+        generation.executableDefaultMasterPlanAssembly.availableScheduleRowCount = scheduleRowCount
+        generation.executableDefaultMasterPlanAssembly.visibleDependencyCount = scheduleRowCount - 1
+        generation.executableDefaultMasterPlanPreview.scheduleRowCount = scheduleRowCount
+        generation.executableDefaultMasterPlanPreview.visibleDependencyCount = scheduleRowCount - 1
+      },
+    },
+    {
+      name: 'below-governed-minimum',
+      mutate: (preview) => {
+        const generation = preview.profile.generation
+        const scheduleRowCount = generation.executableDefaultMasterPlanAssembly.minimumScheduleRowCount - 1
+        generation.executableDefaultMasterPlanAssembly.scheduleRowCount = scheduleRowCount
+        generation.executableDefaultMasterPlanAssembly.visibleDependencyCount = scheduleRowCount - 1
+        generation.executableDefaultMasterPlanPreview.scheduleRowCount = scheduleRowCount
+        generation.executableDefaultMasterPlanPreview.visibleDependencyCount = scheduleRowCount - 1
+      },
+    },
+    {
       name: 'missing-execution-phases',
       mutate: (preview) => { delete preview.profile.generation.executableDefaultMasterPlanAssembly.missingExecutionPhases },
     },
@@ -998,7 +1023,16 @@ test('ordinary staging user completes the full wizard and baseline smoke when ad
         candidate.businessType === requestBody.businessType
       ))
       assert.ok(previewCase, `unexpected preview business type: ${requestBody.businessType}`)
-      send(200, buildReadyPreviewResponse(previewCase))
+      send(200, buildReadyPreviewResponse(
+        previewCase,
+        previewCase.businessType === 'hotel'
+          ? {
+              scheduleRowCount: 67,
+              minimumScheduleRowCount: 60,
+              availableScheduleRowCount: 67,
+            }
+          : {},
+      ))
       return
     }
     if (req.method === 'POST' && requestUrl.pathname === '/api/projects/wizard') {
@@ -1152,10 +1186,13 @@ test('ordinary staging user completes the full wizard and baseline smoke when ad
     child.once('close', (code) => resolveChild({ code, stderr }))
   })
 
-  assert.equal(childResult.code, 0, childResult.stderr)
+  const childReport = fs.existsSync(reportPath)
+    ? JSON.parse(fs.readFileSync(reportPath, 'utf8'))
+    : null
+  assert.equal(childResult.code, 0, childResult.stderr || childReport?.error?.message)
   assert.equal(accuracyRequestCount, 1)
   assert.equal(previewRequestCount, canonicalBusinessPreviewCases.length)
-  const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'))
+  const report = childReport
   assert.equal(report.status, 'pass')
   assert.equal(report.steps.durationAccuracyReadback.status, 'unavailable')
   assert.equal(report.steps.durationAccuracyReadback.httpStatus, 403)
@@ -1166,6 +1203,13 @@ test('ordinary staging user completes the full wizard and baseline smoke when ad
     'wizard_business_smoke_only_no_accuracy_readback_claim',
   )
   assert.equal(report.steps.previewBusinessTypeMatrix.status, 'pass')
+  const hotelPreviewEvidence = report.steps.previewBusinessTypeMatrix.cases.find(({ businessType }) => (
+    businessType === 'hotel'
+  ))
+  assert.deepEqual(hotelPreviewEvidence.profileRowCountRange, [71, 142])
+  assert.equal(hotelPreviewEvidence.scheduleRowCount, 67)
+  assert.equal(hotelPreviewEvidence.minimumScheduleRowCount, 60)
+  assert.equal(hotelPreviewEvidence.operationalRowFloor, 60)
   assert.equal(report.steps.commitWizardGeneration.status, 'pass')
   assert.equal(report.steps.taskDependencyReadback.status, 'pass')
   assert.equal(report.steps.criticalPathReadback.status, 'pass')
