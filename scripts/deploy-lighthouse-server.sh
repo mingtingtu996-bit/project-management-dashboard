@@ -277,16 +277,28 @@ PY
 }
 
 set_release_contract() {
-  local release_dir="$1" expected_sha="$2" actual_sha server_sha
+  local release_dir="$1" expected_sha="$2" server_contract_mode="${3:-require_prebuilt}"
+  local actual_sha server_sha require_server_artifact=false
   [ -f "$release_dir/$COMPOSE_FILE" ] || { echo "Release Compose file is missing." >&2; return 1; }
   [ -f "$release_dir/deploy/env/server.production.env" ] || { echo "Release runtime env link is missing." >&2; return 1; }
   [ -f "$release_dir/scripts/classify-public-ingress-url.mjs" ] || { echo "Release ingress classifier is missing." >&2; return 1; }
   [ -f "$release_dir/client/dist/workbuddy-build.json" ] || { echo "Release frontend build provenance is missing." >&2; return 1; }
   actual_sha="$(release_sha_from_manifest "$release_dir")" || return 1
   [ "$actual_sha" = "$expected_sha" ] || { echo "Frontend build provenance does not match release SHA $expected_sha." >&2; return 1; }
-  [ -f "$release_dir/server/dist/index.js" ] || { echo "Prebuilt server entrypoint is missing." >&2; return 1; }
-  server_sha="$(server_release_sha_from_manifest "$release_dir")" || return 1
-  [ "$server_sha" = "$expected_sha" ] || { echo "Server build provenance does not match release SHA $expected_sha." >&2; return 1; }
+  case "$server_contract_mode" in
+    require_prebuilt) require_server_artifact=true ;;
+    allow_legacy_source)
+      if [ -e "$release_dir/server/dist/index.js" ] || [ -e "$release_dir/server/dist/workbuddy-server-build.json" ]; then
+        require_server_artifact=true
+      fi
+      ;;
+    *) echo "Unknown server release contract mode: $server_contract_mode" >&2; return 1 ;;
+  esac
+  if [ "$require_server_artifact" = true ]; then
+    [ -f "$release_dir/server/dist/index.js" ] || { echo "Prebuilt server entrypoint is missing." >&2; return 1; }
+    server_sha="$(server_release_sha_from_manifest "$release_dir")" || return 1
+    [ "$server_sha" = "$expected_sha" ] || { echo "Server build provenance does not match release SHA $expected_sha." >&2; return 1; }
+  fi
   ACTIVE_RELEASE_DIR="$release_dir"
   ACTIVE_RELEASE_SHA="$expected_sha"
   LATEST_SCHEMA_MIGRATION_PATH="$(find "$release_dir/server/migrations" -maxdepth 1 -type f -name '[0-9]*_*.sql' -print | sort -V | tail -n 1)"
@@ -376,8 +388,9 @@ run_api_build_with_cache_repair() {
 }
 
 build_and_up_release() {
-  local release_dir="$1" release_sha="$2" migration_filename migration_checksum
-  set_release_contract "$release_dir" "$release_sha" || return 1
+  local release_dir="$1" release_sha="$2" server_contract_mode="${3:-require_prebuilt}"
+  local migration_filename migration_checksum
+  set_release_contract "$release_dir" "$release_sha" "$server_contract_mode" || return 1
   migration_filename="$EXPECTED_SCHEMA_MIGRATION_FILENAME"
   migration_checksum="$EXPECTED_SCHEMA_MIGRATION_CHECKSUM"
   run_api_build_with_cache_repair "$release_dir" "$release_sha" "$migration_filename" "$migration_checksum" || return 1
@@ -676,7 +689,7 @@ rollback_application_release() {
     [ -d "$previous_target" ] || return 1
     case "$current_target" in "$activated_target"|"$previous_target") ;; *) return 1 ;; esac
     previous_sha="$(release_sha_from_manifest "$previous_target")" || return 1
-    build_and_up_release "$previous_target" "$previous_sha" || return 1
+    build_and_up_release "$previous_target" "$previous_sha" allow_legacy_source || return 1
     verify_release_health "$previous_sha" || {
       echo "Previous release is not compatible with the migrated schema; rollback remains pending." >&2
       return 1
@@ -709,7 +722,7 @@ snapshot_legacy_release() {
   fi
   prepare_runtime_links "$snapshot_candidate" || { rm -rf "$snapshot_candidate"; return 1; }
   previous_sha="$(release_sha_from_manifest "$snapshot_candidate")" || { rm -rf "$snapshot_candidate"; return 1; }
-  set_release_contract "$snapshot_candidate" "$previous_sha" || { rm -rf "$snapshot_candidate"; return 1; }
+  set_release_contract "$snapshot_candidate" "$previous_sha" allow_legacy_source || { rm -rf "$snapshot_candidate"; return 1; }
   mv "$snapshot_candidate" "$snapshot_dir" || return 1
   atomic_link "$snapshot_dir" || return 1
   printf '%s' "$snapshot_dir"
@@ -765,7 +778,7 @@ mkdir -p "$CANDIDATE_DIR"
 validate_release_archive "$RELEASE_ARCHIVE"
 tar -xzf "$RELEASE_ARCHIVE" -C "$CANDIDATE_DIR"
 prepare_runtime_links "$CANDIDATE_DIR"
-set_release_contract "$CANDIDATE_DIR" "$RELEASE_SHA"
+set_release_contract "$CANDIDATE_DIR" "$RELEASE_SHA" require_prebuilt
 mv "$CANDIDATE_DIR" "$RELEASE_DIR"
 CANDIDATE_DIR=''
 rm -f "$RELEASE_ARCHIVE"

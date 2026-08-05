@@ -1203,13 +1203,14 @@ jobs:
     name: Deploy To Self-hosted Server
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    needs: [build-frontend, browser-checks, browser-checks-summary, database-migration, workspace-isolation-live]
+    needs: [server-quality, build-frontend, browser-checks, browser-checks-summary, database-migration, workspace-isolation-live]
     environment: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || 'production' }}
     env:
       DEPLOY_TARGET: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || 'production' }}
       HAS_SLACK_WEBHOOK: ${{ secrets[format('{0}_SLACK_WEBHOOK', github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] != '' }}
     if: >
       always() &&
+      needs.server-quality.result == 'success' &&
       needs.build-frontend.result == 'success' &&
       needs.browser-checks.result == 'success' &&
       needs.browser-checks-summary.result == 'success' &&
