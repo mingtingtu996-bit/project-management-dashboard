@@ -257,6 +257,61 @@ test('deployment workflow supplies the explicit bootstrap contract and runs the 
   assert.match(guardWorkflow, /application-release-atomicity\.contract\.test\.mjs/u)
 })
 
+test('deployment promotes the tested server build without compiling TypeScript on the runtime host', async () => {
+  const [deployWorkflow, dockerfile, compose, deployScript] = await Promise.all([
+    source('.github/workflows/deploy.yml'),
+    source('server/Dockerfile'),
+    source('deploy/docker-compose.lighthouse.yml'),
+    source('scripts/deploy-lighthouse-server.sh'),
+  ])
+  const workflow = loadYaml(deployWorkflow)
+  const serverSteps = workflow.jobs['server-quality'].steps
+  const serverBuildIndex = serverSteps.findIndex((step) => step.name === 'Server build')
+  const serverStampIndex = serverSteps.findIndex((step) => step.name === 'Stamp server build provenance')
+  const serverUploadIndex = serverSteps.findIndex((step) => step.name === 'Upload tested server build')
+
+  assert.notEqual(serverBuildIndex, -1, 'server build step is required')
+  assert.ok(serverBuildIndex < serverStampIndex, 'server provenance must be stamped after compilation')
+  assert.ok(serverStampIndex < serverUploadIndex, 'only the stamped server build may be uploaded')
+  assert.deepEqual(serverSteps[serverUploadIndex].with, {
+    name: 'server-build',
+    path: 'server/dist',
+    'if-no-files-found': 'error',
+    'retention-days': 7,
+  })
+
+  const deploySteps = workflow.jobs['deploy-server'].steps
+  const serverDownload = deploySteps.find((step) => step.name === 'Download tested server build')
+  assert.deepEqual(serverDownload?.with, {
+    name: 'server-build',
+    path: 'server/dist',
+  })
+  const remoteDeploy = deploySteps.find((step) => step.name === 'Deploy to self-hosted server')
+  assert.match(remoteDeploy?.run ?? '', /cp -a server\/dist\/\. "\$RELEASE_DIR\/server\/dist\/"/u)
+
+  const apiSection = compose.slice(compose.indexOf('  api:'), compose.indexOf('  worker:'))
+  const workerSection = compose.slice(compose.indexOf('  worker:'), compose.indexOf('  web:'))
+  assert.match(apiSection, /target:\s*prebuilt-runtime/u)
+  assert.match(workerSection, /target:\s*prebuilt-runtime/u)
+
+  const prebuiltStart = dockerfile.indexOf('FROM runtime-base AS prebuilt-runtime')
+  const sourceBuilderStart = dockerfile.indexOf('FROM node:22-bookworm-slim AS deps', prebuiltStart + 1)
+  const defaultRuntimeStart = dockerfile.indexOf('FROM runtime-base AS runtime', prebuiltStart + 1)
+  assert.ok(prebuiltStart >= 0, 'server Dockerfile must expose a prebuilt runtime target')
+  assert.ok(
+    sourceBuilderStart > prebuiltStart,
+    'the prebuilt target must precede every source-compilation stage',
+  )
+  assert.ok(defaultRuntimeStart > prebuiltStart, 'the source-building runtime must remain the default target')
+  const prebuiltStage = dockerfile.slice(prebuiltStart, sourceBuilderStart)
+  assert.match(prebuiltStage, /COPY dist \.\/dist/u)
+  assert.doesNotMatch(prebuiltStage, /builder|npm run build|tsc/u)
+
+  assert.match(deployScript, /server\/dist\/index\.js/u)
+  assert.match(deployScript, /workbuddy-server-build\.json/u)
+  assert.match(deployScript, /Server build provenance does not match release SHA/u)
+})
+
 test('workflow installs server dependencies before the YAML-backed atomicity contract', async () => {
   const workflow = loadYaml(await source('.github/workflows/workflow-guard.yml'))
   const steps = workflow.jobs['deploy-workflow-contract'].steps

@@ -248,6 +248,20 @@ jobs:
       - name: Server build
         run: npm run build
 
+      - name: Stamp server build provenance
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          node -e "const fs=require('fs'); fs.writeFileSync('dist/workbuddy-server-build.json', JSON.stringify({releaseSha:process.env.RELEASE_SHA,builtAt:new Date().toISOString()}, null, 2)+'\n')"
+
+      - name: Upload tested server build
+        uses: actions/upload-artifact@v7
+        with:
+          name: server-build
+          path: server/dist
+          if-no-files-found: error
+          retention-days: 7
+
   build-frontend:
     name: Build Frontend Artifact
     runs-on: ubuntu-latest
@@ -1212,6 +1226,12 @@ jobs:
           name: frontend-build
           path: client/dist
 
+      - name: Download tested server build
+        uses: actions/download-artifact@v7
+        with:
+          name: server-build
+          path: server/dist
+
       - name: Download current release readiness gate
         uses: actions/download-artifact@v7
         with:
@@ -1321,6 +1341,8 @@ jobs:
           git archive --format=tar "$RELEASE_SHA" | tar -xf - -C "$RELEASE_DIR"
           mkdir -p "$RELEASE_DIR/client/dist"
           cp -a client/dist/. "$RELEASE_DIR/client/dist/"
+          mkdir -p "$RELEASE_DIR/server/dist"
+          cp -a server/dist/. "$RELEASE_DIR/server/dist/"
           tar -czf "$RELEASE_ARCHIVE" -C "$RELEASE_DIR" .
           scp \
             -i ~/.ssh/project-management-deploy \

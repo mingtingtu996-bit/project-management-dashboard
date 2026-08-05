@@ -263,14 +263,30 @@ print(value, end='')
 PY
 }
 
+server_release_sha_from_manifest() {
+  python3 - "$1/server/dist/workbuddy-server-build.json" <<'PY'
+import json
+import re
+import sys
+with open(sys.argv[1], encoding='utf-8') as handle:
+    value = json.load(handle).get('releaseSha', '')
+if not re.fullmatch(r'[0-9a-f]{40}', value):
+    raise SystemExit(1)
+print(value, end='')
+PY
+}
+
 set_release_contract() {
-  local release_dir="$1" expected_sha="$2" actual_sha
+  local release_dir="$1" expected_sha="$2" actual_sha server_sha
   [ -f "$release_dir/$COMPOSE_FILE" ] || { echo "Release Compose file is missing." >&2; return 1; }
   [ -f "$release_dir/deploy/env/server.production.env" ] || { echo "Release runtime env link is missing." >&2; return 1; }
   [ -f "$release_dir/scripts/classify-public-ingress-url.mjs" ] || { echo "Release ingress classifier is missing." >&2; return 1; }
   [ -f "$release_dir/client/dist/workbuddy-build.json" ] || { echo "Release frontend build provenance is missing." >&2; return 1; }
   actual_sha="$(release_sha_from_manifest "$release_dir")" || return 1
   [ "$actual_sha" = "$expected_sha" ] || { echo "Frontend build provenance does not match release SHA $expected_sha." >&2; return 1; }
+  [ -f "$release_dir/server/dist/index.js" ] || { echo "Prebuilt server entrypoint is missing." >&2; return 1; }
+  server_sha="$(server_release_sha_from_manifest "$release_dir")" || return 1
+  [ "$server_sha" = "$expected_sha" ] || { echo "Server build provenance does not match release SHA $expected_sha." >&2; return 1; }
   ACTIVE_RELEASE_DIR="$release_dir"
   ACTIVE_RELEASE_SHA="$expected_sha"
   LATEST_SCHEMA_MIGRATION_PATH="$(find "$release_dir/server/migrations" -maxdepth 1 -type f -name '[0-9]*_*.sql' -print | sort -V | tail -n 1)"
