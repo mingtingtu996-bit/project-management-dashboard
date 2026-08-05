@@ -926,6 +926,16 @@ function readRequiredStringArray(value) {
   return normalized
 }
 
+function readOptionalIsoDate(value) {
+  const normalized = readRequiredString(value)
+  return normalized && isValidIsoDate(normalized) ? normalized : null
+}
+
+function readOptionalNonNegativeNumber(value) {
+  const normalized = readRequiredFiniteNumber(value)
+  return normalized !== null && normalized >= 0 ? normalized : null
+}
+
 function validateBusinessTypePreview(previewCase, preview, httpStatus) {
   const identity = preview?.profile?.identity ?? {}
   const generation = preview?.profile?.generation ?? {}
@@ -1152,17 +1162,17 @@ try {
     httpStatus: 200,
     canonicalBusinessType: wizardPayload.businessType,
     canonicalBusinessSubtype: wizardPayload.businessSubtype,
-    estimatedRowCount: canonicalResidentialPreview?.estimatedRowCount ?? null,
-    generatedScheduleRowCount: previewGeneration.durationAssetUtilizationSummary?.scheduleRowCount ?? null,
-    assemblyStatus: previewGeneration.executableDefaultMasterPlanAssembly?.status ?? null,
-    planQualityStatus: previewQualityDiagnostics.status ?? null,
-    runtimeApprovalRequired: previewQualityDiagnostics.runtimeApprovalRequired ?? null,
-    blocksWizardCommit: previewQualityDiagnostics.blocksWizardCommit ?? null,
-    unresolvedDependencyCount: previewQualityDiagnostics.unresolvedDependencyCount ?? null,
-    targetEndDate: previewTargetAlignment?.targetEndDate ?? null,
-    naturalEndDate: previewTargetAlignment?.naturalEndDate ?? null,
-    targetOvershootDays: previewTargetAlignment?.overshootDays ?? null,
-    targetUnrecoverableDays: previewTargetAlignment?.unrecoverableDays ?? null,
+    estimatedRowCount: readRequiredNonNegativeInteger(canonicalResidentialPreview?.estimatedRowCount),
+    generatedScheduleRowCount: readRequiredNonNegativeInteger(previewGeneration.durationAssetUtilizationSummary?.scheduleRowCount),
+    assemblyStatus: readRequiredString(previewGeneration.executableDefaultMasterPlanAssembly?.status),
+    planQualityStatus: readRequiredString(previewQualityDiagnostics.status),
+    runtimeApprovalRequired: readRequiredBoolean(previewQualityDiagnostics.runtimeApprovalRequired),
+    blocksWizardCommit: readRequiredBoolean(previewQualityDiagnostics.blocksWizardCommit),
+    unresolvedDependencyCount: readRequiredNonNegativeInteger(previewQualityDiagnostics.unresolvedDependencyCount),
+    targetEndDate: readOptionalIsoDate(previewTargetAlignment?.targetEndDate),
+    naturalEndDate: readOptionalIsoDate(previewTargetAlignment?.naturalEndDate),
+    targetOvershootDays: readOptionalNonNegativeNumber(previewTargetAlignment?.overshootDays),
+    targetUnrecoverableDays: readOptionalNonNegativeNumber(previewTargetAlignment?.unrecoverableDays),
   }
   writeResultReport()
 

@@ -754,7 +754,20 @@ test('wizard baseline revision staging smoke recovers and deletes a project when
         candidate.businessType === requestBody.businessType
       ))
       assert.ok(previewCase, `unexpected preview business type: ${requestBody.businessType}`)
-      send(200, buildReadyPreviewResponse(previewCase))
+      const preview = buildReadyPreviewResponse(previewCase)
+      if (previewCase.businessType === 'general_civil') {
+        const secret = { internalSecret: 'successful-preview-must-not-leak' }
+        preview.estimatedRowCount = secret
+        preview.profile.generation.durationAssetUtilizationSummary = { scheduleRowCount: secret }
+        preview.profile.generation.planQualityDiagnostics.status = secret
+        preview.profile.generation.planQualityDiagnostics.targetAlignmentSnapshot = {
+          targetEndDate: secret,
+          naturalEndDate: secret,
+          overshootDays: secret,
+          unrecoverableDays: secret,
+        }
+      }
+      send(200, preview)
       return
     }
     if (req.method === 'GET' && req.url === '/api/admin/duration-accuracy/summary') {
@@ -889,7 +902,8 @@ test('wizard baseline revision staging smoke recovers and deletes a project when
     && node.metadata.areaAccountingMode === 'counted'
     && node.metadata.childrenComplete === true
   )), true)
-  const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'))
+  const reportText = fs.readFileSync(reportPath, 'utf8')
+  const report = JSON.parse(reportText)
   assert.equal(report.projectId, createdProjectId)
   assert.equal(report.steps.projectRecovery.status, 'pass')
   assert.equal(report.steps.durationAccuracyReadback.status, 'pass')
@@ -915,6 +929,14 @@ test('wizard baseline revision staging smoke recovers and deletes a project when
     assert.equal(previewEvidence.networkRootCount, 1)
     assert.equal(previewEvidence.networkSinkCount, 1)
   }
+  assert.equal(reportText.includes('successful-preview-must-not-leak'), false)
+  assert.equal(report.steps.previewCandidatePlan.estimatedRowCount, null)
+  assert.equal(report.steps.previewCandidatePlan.generatedScheduleRowCount, null)
+  assert.equal(report.steps.previewCandidatePlan.planQualityStatus, null)
+  assert.equal(report.steps.previewCandidatePlan.targetEndDate, null)
+  assert.equal(report.steps.previewCandidatePlan.naturalEndDate, null)
+  assert.equal(report.steps.previewCandidatePlan.targetOvershootDays, null)
+  assert.equal(report.steps.previewCandidatePlan.targetUnrecoverableDays, null)
   assert.equal(report.cleanup.status, 'pass')
   assert.equal(report.cleanup.projectPhysicallyDeleted, true)
   assert.equal(project, null)
