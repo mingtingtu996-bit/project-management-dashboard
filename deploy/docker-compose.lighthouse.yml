@@ -3,6 +3,7 @@ services:
     build:
       context: ../server
       dockerfile: Dockerfile
+      target: prebuilt-runtime
     container_name: ${COMPOSE_PROJECT_NAME:-project-management}-api
     restart: unless-stopped
     expose:
@@ -37,6 +38,7 @@ services:
     build:
       context: ../server
       dockerfile: Dockerfile
+      target: prebuilt-runtime
     container_name: ${COMPOSE_PROJECT_NAME:-project-management}-worker
     restart: unless-stopped
     env_file:

@@ -37,7 +37,10 @@ test('release archives are prepared outside the live tree and activated with a r
   assert.match(script, /PREVIOUS_TARGET/u)
   assert.match(script, /rollback_application_release/u)
   assert.match(script, /verify_release_health/u)
-  assert.match(script, /build_and_up_release "\$previous_target" "\$previous_sha"/u)
+  assert.match(
+    script,
+    /build_and_up_release "\$previous_target" "\$previous_sha" allow_legacy_source/u,
+  )
   assert.doesNotMatch(script, /git ls-files -z \| xargs -0 -r rm/u)
   assert.doesNotMatch(script, /rm -rf client\/dist/u)
   assert.doesNotMatch(script, /tar -xzf "\$RELEASE_ARCHIVE" -C "\$APP_DIR"/u)
@@ -257,6 +260,156 @@ test('deployment workflow supplies the explicit bootstrap contract and runs the 
   assert.match(guardWorkflow, /application-release-atomicity\.contract\.test\.mjs/u)
 })
 
+test('deployment promotes the tested server build without compiling TypeScript on the runtime host', async () => {
+  const [deployWorkflow, dockerfile, compose, deployScript] = await Promise.all([
+    source('.github/workflows/deploy.yml'),
+    source('server/Dockerfile'),
+    source('deploy/docker-compose.lighthouse.yml'),
+    source('scripts/deploy-lighthouse-server.sh'),
+  ])
+  const workflow = loadYaml(deployWorkflow)
+  const serverSteps = workflow.jobs['server-quality'].steps
+  const serverBuildIndex = serverSteps.findIndex((step) => step.name === 'Server build')
+  const serverStampIndex = serverSteps.findIndex((step) => step.name === 'Stamp server build provenance')
+  const serverUploadIndex = serverSteps.findIndex((step) => step.name === 'Upload tested server build')
+  const serverStamp = serverSteps[serverStampIndex]
+
+  assert.notEqual(serverBuildIndex, -1, 'server build step is required')
+  assert.ok(serverBuildIndex < serverStampIndex, 'server provenance must be stamped after compilation')
+  assert.ok(serverStampIndex < serverUploadIndex, 'only the stamped server build may be uploaded')
+  assert.equal(serverStamp.env.RELEASE_SHA, '${{ github.sha }}')
+  assert.match(serverStamp.run, /workbuddy-server-build\.json/u)
+  assert.match(serverStamp.run, /process\.env\.RELEASE_SHA/u)
+  assert.match(serverStamp.run, /releaseSha\s*:\s*process\.env\.RELEASE_SHA/u)
+  assert.deepEqual(serverSteps[serverUploadIndex].with, {
+    name: 'server-build',
+    path: 'server/dist',
+    'if-no-files-found': 'error',
+    'retention-days': 7,
+  })
+
+  const deployJob = workflow.jobs['deploy-server']
+  const deploySteps = deployJob.steps
+  assert.ok(deployJob.needs.includes('server-quality'))
+  assert.match(deployJob.if, /needs\.server-quality\.result == 'success'/u)
+  const serverDownloadIndex = deploySteps.findIndex(
+    (step) => step.name === 'Download tested server build',
+  )
+  const remoteDeployIndex = deploySteps.findIndex(
+    (step) => step.name === 'Deploy to self-hosted server',
+  )
+  const serverDownload = deploySteps[serverDownloadIndex]
+  assert.ok(serverDownloadIndex >= 0, 'tested server artifact download is required')
+  assert.ok(
+    serverDownloadIndex < remoteDeployIndex,
+    'tested server artifact must be downloaded before the remote deploy step',
+  )
+  assert.deepEqual(serverDownload?.with, {
+    name: 'server-build',
+    path: 'server/dist',
+  })
+  const remoteDeploy = deploySteps[remoteDeployIndex]
+  const remoteDeployRun = remoteDeploy?.run ?? ''
+  const serverArtifactCopyIndex = remoteDeployRun.indexOf('cp -a server/dist/. "$RELEASE_DIR/server/dist/"')
+  const releaseArchiveIndex = remoteDeployRun.indexOf('tar -czf "$RELEASE_ARCHIVE"')
+  assert.ok(serverArtifactCopyIndex >= 0, 'tested server artifact must enter the release directory')
+  assert.ok(
+    serverArtifactCopyIndex < releaseArchiveIndex,
+    'tested server artifact must be copied before the release archive is created',
+  )
+
+  const apiSection = compose.slice(compose.indexOf('  api:'), compose.indexOf('  worker:'))
+  const workerSection = compose.slice(compose.indexOf('  worker:'), compose.indexOf('  web:'))
+  assert.match(apiSection, /target:\s*prebuilt-runtime/u)
+  assert.match(workerSection, /target:\s*prebuilt-runtime/u)
+
+  const prebuiltStart = dockerfile.indexOf('FROM runtime-base AS prebuilt-runtime')
+  const sourceBuilderStart = dockerfile.indexOf('FROM node:22-bookworm-slim AS deps', prebuiltStart + 1)
+  const defaultRuntimeStart = dockerfile.indexOf('FROM runtime-base AS runtime', prebuiltStart + 1)
+  assert.ok(prebuiltStart >= 0, 'server Dockerfile must expose a prebuilt runtime target')
+  assert.ok(
+    sourceBuilderStart > prebuiltStart,
+    'the prebuilt target must precede every source-compilation stage',
+  )
+  assert.ok(defaultRuntimeStart > prebuiltStart, 'the source-building runtime must remain the default target')
+  const prebuiltStage = dockerfile.slice(prebuiltStart, sourceBuilderStart)
+  assert.match(prebuiltStage, /COPY dist \.\/dist/u)
+  assert.doesNotMatch(prebuiltStage, /builder|npm run build|tsc/u)
+
+  assert.match(deployScript, /server\/dist\/index\.js/u)
+  assert.match(deployScript, /workbuddy-server-build\.json/u)
+  assert.match(deployScript, /Server build provenance does not match release SHA/u)
+  assert.match(
+    deployScript,
+    /set_release_contract "\$CANDIDATE_DIR" "\$RELEASE_SHA" require_prebuilt/u,
+  )
+})
+
+test('rollback can rebuild a pre-artifact release while candidates require exact server provenance', async () => {
+  const script = await source('scripts/deploy-lighthouse-server.sh')
+  const frontendManifestReader = script.match(
+    /(release_sha_from_manifest\(\) \{[\s\S]*?\n\})\n\nserver_release_sha_from_manifest/u,
+  )?.[1]
+  const serverManifestReader = script.match(
+    /(server_release_sha_from_manifest\(\) \{[\s\S]*?\n\})\n\nset_release_contract/u,
+  )?.[1]
+  const releaseContract = script.match(
+    /(set_release_contract\(\) \{[\s\S]*?\n\})\n\nrun_docker_compose/u,
+  )?.[1]
+  const buildAndUp = script.match(
+    /(build_and_up_release\(\) \{[\s\S]*?\n\})\n\nverify_readyz_identity/u,
+  )?.[1]
+  assert.ok(frontendManifestReader, 'frontend release manifest reader must remain executable')
+  assert.ok(serverManifestReader, 'server release manifest reader must remain executable')
+  assert.ok(releaseContract, 'release contract must remain executable')
+  assert.ok(buildAndUp, 'release build-and-up path must remain executable')
+
+  const legacySha = '6'.repeat(40)
+  const candidateSha = '7'.repeat(40)
+  const result = runBash(`
+set -euo pipefail
+${python3Shim}
+ROOT_DIR="$(mktemp -d)"
+trap 'rm -rf "$ROOT_DIR"' EXIT
+COMPOSE_FILE=deploy/docker-compose.lighthouse.yml
+make_release() {
+  local release_dir="$1" release_sha="$2"
+  mkdir -p "$release_dir/deploy/env" "$release_dir/scripts" "$release_dir/client/dist" "$release_dir/server/migrations"
+  : > "$release_dir/$COMPOSE_FILE"
+  : > "$release_dir/deploy/env/server.production.env"
+  : > "$release_dir/scripts/classify-public-ingress-url.mjs"
+  printf '{"releaseSha":"%s"}\n' "$release_sha" > "$release_dir/client/dist/workbuddy-build.json"
+  printf '%s\n' 'SELECT 1;' > "$release_dir/server/migrations/001_contract.sql"
+}
+${frontendManifestReader}
+${serverManifestReader}
+${releaseContract}
+${buildAndUp}
+run_api_build_with_cache_repair() { printf 'build:%s:%s\n' "$1" "$2" >> "$ROOT_DIR/calls"; }
+run_docker_compose() { printf 'compose:%s:%s:%s\n' "$1" "$2" "${'$'}5" >> "$ROOT_DIR/calls"; }
+
+legacy="$ROOT_DIR/legacy"
+make_release "$legacy" ${legacySha}
+build_and_up_release "$legacy" ${legacySha} allow_legacy_source
+grep -Fqx "build:$legacy:${legacySha}" "$ROOT_DIR/calls"
+if set_release_contract "$legacy" ${legacySha} require_prebuilt; then exit 91; fi
+
+candidate="$ROOT_DIR/candidate"
+make_release "$candidate" ${candidateSha}
+mkdir -p "$candidate/server/dist"
+: > "$candidate/server/dist/index.js"
+printf '{"releaseSha":"%s"}\n' ${candidateSha} > "$candidate/server/dist/workbuddy-server-build.json"
+set_release_contract "$candidate" ${candidateSha} require_prebuilt
+rm "$candidate/server/dist/workbuddy-server-build.json"
+if set_release_contract "$candidate" ${candidateSha} require_prebuilt; then exit 92; fi
+if set_release_contract "$candidate" ${candidateSha} allow_legacy_source; then exit 93; fi
+printf '{"releaseSha":"%s"}\n' ${'8'.repeat(40)} > "$candidate/server/dist/workbuddy-server-build.json"
+if set_release_contract "$candidate" ${candidateSha} require_prebuilt; then exit 94; fi
+`)
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
+})
+
 test('workflow installs server dependencies before the YAML-backed atomicity contract', async () => {
   const workflow = loadYaml(await source('.github/workflows/workflow-guard.yml'))
   const steps = workflow.jobs['deploy-workflow-contract'].steps
@@ -464,7 +617,10 @@ STATE
 require_sha() { [[ "$1" =~ ^[0-9a-f]{40}$ ]]; }
 state_value() { awk -F= -v key="$1" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "$STATE_FILE"; }
 release_sha_from_manifest() { printf '%s' ${previousSha}; }
-build_and_up_release() { printf 'build:%s:%s\n' "$1" "$2" >> "$ROOT_DIR/calls"; }
+build_and_up_release() {
+  [ "${'$'}{3:-}" = allow_legacy_source ] || return 89
+  printf 'build:%s:%s\n' "$1" "$2" >> "$ROOT_DIR/calls"
+}
 verify_release_health() {
   printf 'verify:%s\n' "$1" >> "$ROOT_DIR/calls"
   [ "$SCHEMA_COMPATIBLE" = true ]
