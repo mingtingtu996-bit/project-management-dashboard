@@ -1255,7 +1255,7 @@ test('ordinary staging user completes the full wizard and baseline smoke when ad
   assert.equal(project, null)
 })
 
-test('staging smoke fails closed and cleans up when async wizard generation fails', async (t) => {
+test('staging smoke fails closed and cleans up when async wizard generation fails or times out', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wizard-async-generation-failure-'))
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))
 
@@ -1265,6 +1265,7 @@ test('staging smoke fails closed and cleans up when async wizard generation fail
   let project = null
   let generationStatusRequestCount = 0
   let downstreamReadCount = 0
+  let generationStatusState = 'failed'
 
   const server = http.createServer(async (req, res) => {
     const chunks = []
@@ -1327,9 +1328,13 @@ test('staging smoke fails closed and cleans up when async wizard generation fail
       send(200, {
         projectId,
         attemptId: generationAttemptId,
-        state: 'failed',
-        errorCode: 'EXECUTION_FACT_PERMISSION_DENIED',
-        error: 'sensitive postgres permission details',
+        state: generationStatusState,
+        ...(generationStatusState === 'failed'
+          ? {
+              errorCode: 'EXECUTION_FACT_PERMISSION_DENIED',
+              error: 'sensitive postgres permission details',
+            }
+          : {}),
       })
       return
     }
@@ -1360,7 +1365,6 @@ test('staging smoke fails closed and cleans up when async wizard generation fail
   assert.equal(typeof address, 'object')
 
   const envPath = path.join(root, 'staging.env')
-  const reportPath = path.join(root, 'report.json')
   fs.writeFileSync(envPath, [
     'SUPABASE_URL=https://stagingref.supabase.co',
     'TEST_USERNAME=smoke@example.com',
@@ -1368,7 +1372,7 @@ test('staging smoke fails closed and cleans up when async wizard generation fail
     '',
   ].join('\n'))
 
-  const childResult = await new Promise((resolveChild, rejectChild) => {
+  const runSmoke = (reportPath) => new Promise((resolveChild, rejectChild) => {
     const child = spawn(process.execPath, [
       smokeScriptPath,
       '--env-file', envPath,
@@ -1385,6 +1389,9 @@ test('staging smoke fails closed and cleans up when async wizard generation fail
     child.once('close', (code) => resolveChild({ code, stderr }))
   })
 
+  const reportPath = path.join(root, 'failed-report.json')
+  const childResult = await runSmoke(reportPath)
+
   assert.equal(childResult.code, 1)
   assert.equal(generationStatusRequestCount, 1)
   assert.equal(downstreamReadCount, 0)
@@ -1400,4 +1407,25 @@ test('staging smoke fails closed and cleans up when async wizard generation fail
   assert.equal(report.cleanup.status, 'pass')
   assert.equal(report.cleanup.projectPhysicallyDeleted, true)
   assert.equal(reportText.includes('sensitive postgres permission details'), false)
+
+  generationStatusState = 'running'
+  generationStatusRequestCount = 0
+  downstreamReadCount = 0
+  const timeoutReportPath = path.join(root, 'timeout-report.json')
+  const timeoutChildResult = await runSmoke(timeoutReportPath)
+
+  assert.equal(timeoutChildResult.code, 1)
+  assert.equal(generationStatusRequestCount, 2)
+  assert.equal(downstreamReadCount, 0)
+  assert.equal(project, null)
+  const timeoutReport = JSON.parse(fs.readFileSync(timeoutReportPath, 'utf8'))
+  assert.equal(timeoutReport.status, 'fail')
+  assert.equal(timeoutReport.steps.commitWizardGeneration.status, 'fail')
+  assert.equal(timeoutReport.steps.commitWizardGeneration.httpStatus, 202)
+  assert.equal(timeoutReport.steps.commitWizardGeneration.attemptId, generationAttemptId)
+  assert.equal(timeoutReport.steps.commitWizardGeneration.generationState, 'running')
+  assert.equal(timeoutReport.steps.commitWizardGeneration.errorCode, 'WIZARD_GENERATION_TIMEOUT')
+  assert.equal(timeoutReport.steps.commitWizardGeneration.generationPollCount, 2)
+  assert.equal(timeoutReport.cleanup.status, 'pass')
+  assert.equal(timeoutReport.cleanup.projectPhysicallyDeleted, true)
 })

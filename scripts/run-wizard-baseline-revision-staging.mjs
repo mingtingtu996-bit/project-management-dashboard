@@ -588,6 +588,14 @@ async function waitForWizardGeneration(targetProjectId, attemptId) {
     }
   }
 
+  result.steps.commitWizardGeneration = {
+    ...result.steps.commitWizardGeneration,
+    status: 'fail',
+    generationState: lastState,
+    generationPollCount: generationPollAttempts,
+    errorCode: 'WIZARD_GENERATION_TIMEOUT',
+  }
+  writeResultReport()
   throw new Error(
     `wizard generation did not complete after ${generationPollAttempts} status checks; lastState=${lastState}`,
   )
