@@ -7750,11 +7750,15 @@ async function commitWizardGeneration(params: {
       constructionCalendar,
     },
   }
-  const durationLearningRuntimeQueryExec = createDurationRuntimeConsumerObservationQueryExec(
-    async <T = Record<string, unknown>>(sql: string, queryParams?: unknown[]) => {
-      const result = await transactionClient.query(sql, queryParams)
-      return (result.rows ?? []) as T[]
-    },
+  const durationLearningRuntimeQueryExec = async <T = Record<string, unknown>>(
+    sql: string,
+    queryParams?: unknown[],
+  ): Promise<T[]> => {
+    const result = await transactionClient.query(sql, queryParams)
+    return (result.rows ?? []) as T[]
+  }
+  const durationRuntimeConsumerObservationQueryExec = createDurationRuntimeConsumerObservationQueryExec(
+    durationLearningRuntimeQueryExec,
   )
   const runtimeArtifactPublications: WbsTemplateGenerationRuntimeArtifactPublication[] = []
   const generated = await generateWbsTemplateRows({
@@ -7889,7 +7893,7 @@ async function commitWizardGeneration(params: {
     extra: { dependencyCount: generatedDependencies.length },
   })
   await recordWbsTemplateGenerationRuntimeConsumption({
-    queryExec: durationLearningRuntimeQueryExec,
+    queryExec: durationRuntimeConsumerObservationQueryExec,
     projectId: params.projectId,
     generation: generated,
     runtimeArtifactPublications,

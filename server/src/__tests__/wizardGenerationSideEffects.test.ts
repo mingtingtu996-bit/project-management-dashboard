@@ -3456,11 +3456,32 @@ describe('v1.4.22.1 project wizard route side effects', () => {
     expect(generationCall.runtimePublicationQueryExec).toEqual(expect.any(Function))
     expect(generationCall.runtimeConsumerObservationQueryExec).toBeUndefined()
     expect(generationCall.runtimeArtifactPublications).toEqual([])
+    await expect(generationCall.runtimePublicationQueryExec(
+      `select publication_key,
+              asset_key,
+              artifact_key,
+              scope_level,
+              company_id,
+              project_id,
+              industry_key,
+              publication_stage,
+              runtime_payload,
+              previous_publication_key,
+              traffic_percent,
+              monitoring_status,
+              published_at
+         from public.duration_learning_runtime_publications
+        where asset_key = $1
+          and artifact_key = $2`,
+      ['special_work_duration_seed', 'china-gb55032-template'],
+    )).resolves.toEqual(expect.any(Array))
     expect(mocks.recordWbsTemplateGenerationRuntimeConsumption).toHaveBeenCalledWith(expect.objectContaining({
       projectId: committedProjectId,
       generation: expect.any(Object),
       runtimeArtifactPublications: generationCall.runtimeArtifactPublications,
     }))
+    const runtimeObservationCall = mocks.recordWbsTemplateGenerationRuntimeConsumption.mock.calls.at(-1)?.[0] as any
+    expect(runtimeObservationCall.queryExec).not.toBe(generationCall.runtimePublicationQueryExec)
     expect(mocks.persistDurationLearningRuntimeConsumptions).toHaveBeenCalledWith(expect.objectContaining({
       build: expect.objectContaining({
         companyId: 'company-1',
