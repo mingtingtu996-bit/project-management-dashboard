@@ -3349,6 +3349,13 @@
     },
     {
       "kind": "migration",
+      "id": "335_duration_learning_retirement_state_rls_policy",
+      "architectureUnit": "底座：平台运行观测",
+      "runtimeScope": "platform_foundation",
+      "assignmentReason": "adds an explicit deny-all RLS policy to the internal duration-learning retirement state table"
+    },
+    {
+      "kind": "migration",
       "id": "CLEAN_MIGRATION",
       "architectureUnit": "底座：平台运行观测",
       "runtimeScope": "platform_foundation",
@@ -4588,6 +4595,13 @@
       "architectureUnit": "底座：平台运行观测",
       "runtimeScope": "platform_foundation",
       "assignmentReason": "verifies the exact staging or production Supabase target, migration 334 ledger phase, function search_path, and SECURITY DEFINER ACL readback for the protected database-only remediation"
+    },
+    {
+      "kind": "service",
+      "id": "securityAdvisorRetirementStateRlsService",
+      "architectureUnit": "底座：平台运行观测",
+      "runtimeScope": "platform_foundation",
+      "assignmentReason": "verifies migration 335 ledger state and deny-all RLS readback for the internal duration-learning retirement table"
     },
     {
       "kind": "service",

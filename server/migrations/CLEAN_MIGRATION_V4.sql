@@ -1,7 +1,7 @@
--- CANONICAL: current clean bootstrap bundle, synchronized through migration 334
+-- CANONICAL: current clean bootstrap bundle, synchronized through migration 335
 -- CLEAN MIGRATION (UTF-8, no encoding issues)
 -- Generated: 2026-03-26 02:39
--- All 17 migration files merged
+-- All numbered migration files merged
 
 
 -- ============================================================
@@ -23692,6 +23692,34 @@ REVOKE ALL ON FUNCTION public.persist_duration_learning_runtime_consumptions(JSO
   FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.persist_duration_learning_runtime_consumptions(JSONB)
   TO workbuddy_runtime, service_role;
+
+NOTIFY pgrst, 'reload schema';
+
+COMMIT;
+
+-- ============================================================
+-- Source: 335_duration_learning_retirement_state_rls_policy.sql
+-- ============================================================
+-- Make the intentional deny-all boundary explicit for the internal retirement state.
+
+BEGIN;
+
+ALTER TABLE public.duration_learning_legacy_runtime_retirement_state
+  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.duration_learning_legacy_runtime_retirement_state
+  FORCE ROW LEVEL SECURITY;
+
+REVOKE ALL ON TABLE public.duration_learning_legacy_runtime_retirement_state
+  FROM PUBLIC;
+
+DROP POLICY IF EXISTS duration_learning_legacy_runtime_retirement_state_deny_all
+  ON public.duration_learning_legacy_runtime_retirement_state;
+CREATE POLICY duration_learning_legacy_runtime_retirement_state_deny_all
+  ON public.duration_learning_legacy_runtime_retirement_state
+  FOR ALL
+  TO PUBLIC
+  USING (false)
+  WITH CHECK (false);
 
 NOTIFY pgrst, 'reload schema';
 
