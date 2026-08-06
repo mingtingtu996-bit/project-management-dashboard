@@ -69,7 +69,22 @@ export class ProjectClimateProfileJob {
           triggeredBy,
           jobId,
         },
-        async (_attempt, context) => syncAllProjectClimateProfiles(projectIds, { signal: context.signal }),
+        async (_attempt, context) => {
+          const results = await syncAllProjectClimateProfiles(projectIds, { signal: context.signal })
+          const failedCount = results.filter((item) => {
+            const weatherStatus = item.weather && typeof item.weather === 'object'
+              ? String((item.weather as { status?: unknown }).status ?? '')
+              : ''
+            return Boolean(item.error) || weatherStatus === 'failed'
+          }).length
+          if (failedCount > 0) {
+            throw Object.assign(
+              new Error(`PROJECT_CLIMATE_PROFILE_SYNC_PARTIAL_FAILURE:${failedCount}/${results.length}`),
+              { code: 'PROJECT_CLIMATE_PROFILE_SYNC_PARTIAL_FAILURE', failedCount },
+            )
+          }
+          return results
+        },
       )
 
       logger.info('projectClimateProfileJob completed', {
@@ -86,8 +101,7 @@ export class ProjectClimateProfileJob {
         jobId,
         error: error instanceof Error ? error.message : String(error),
       })
-      if (triggeredBy === 'scheduler') throw error
-      return null
+      throw error
     } finally {
       this.isRunning = false
     }

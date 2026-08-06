@@ -423,7 +423,7 @@ export async function collectConstructionOrganizationPlanNetworkRuntimeEvidenceC
         and o.outcome_status = 'accepted'
         and o.writes_runtime_directly = false
         and o.writes_fact_directly = false
-        and o.metadata->>'projectId' = p.project_id
+        and o.metadata->>'projectId' = p.project_id::text
         and coalesce(o.metadata->>'businessType', '') <> ''
         and coalesce(o.metadata->>'useCase', '') <> ''
         and (
@@ -435,7 +435,7 @@ export async function collectConstructionOrganizationPlanNetworkRuntimeEvidenceC
         and a.recommendation_kind = 'construction_organization_plan_network'
         and a.action_type = 'adopted'
         and coalesce(a.action_context->>'publicationKey', '') = p.publication_key
-        and a.action_context->>'projectId' = p.project_id
+        and a.action_context->>'projectId' = p.project_id::text
         and coalesce(a.action_context->>'businessType', '') <> ''
         and a.action_context->>'useCase' = o.metadata->>'useCase'
         and (
@@ -448,7 +448,7 @@ export async function collectConstructionOrganizationPlanNetworkRuntimeEvidenceC
            from public.runtime_consumer_observations rco
           where rco.asset_key = 'construction_organization_plan_network'
             and rco.publication_key = p.publication_key
-            and rco.observation_context->>'projectId' = p.project_id
+            and rco.observation_context->>'projectId' = p.project_id::text
             and coalesce(rco.observation_context->>'businessType', '') <> ''
             and rco.observation_context->>'useCase' = o.metadata->>'useCase'
             and (
@@ -463,7 +463,7 @@ export async function collectConstructionOrganizationPlanNetworkRuntimeEvidenceC
          on impact.source_publication_key = p.publication_key
         and impact.event_type = 'impact_monitoring'
         and impact.event_status = 'monitoring_passed'
-        and impact.event_payload->>'projectId' = p.project_id
+        and impact.event_payload->>'projectId' = p.project_id::text
         and coalesce(impact.event_payload->>'businessType', '') <> ''
         and impact.event_payload->>'useCase' = o.metadata->>'useCase'
         and (
@@ -474,7 +474,7 @@ export async function collectConstructionOrganizationPlanNetworkRuntimeEvidenceC
          on rollback.source_publication_key = p.publication_key
         and rollback.event_type = 'rollback_execution'
         and rollback.event_status = 'rollback_executed'
-        and rollback.event_payload->>'projectId' = p.project_id
+        and rollback.event_payload->>'projectId' = p.project_id::text
         and coalesce(rollback.event_payload->>'businessType', '') <> ''
         and rollback.event_payload->>'useCase' = o.metadata->>'useCase'
         and (

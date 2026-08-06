@@ -1652,6 +1652,169 @@ export interface TaskSnapshotWriteOptions {
   confirmedBy?: string | null
 }
 
+type TaskProgressSnapshotWriteRow = {
+  task_id: string
+  progress: number
+  snapshot_date: string
+  event_type: string
+  event_source: string
+  source_confidence: string
+  confirmation_status: string | null
+  confirmed_at: string | null
+  confirmed_by: string | null
+  notes: string | null
+  status: string | null
+  conditions_met_count: number
+  conditions_total_count: number
+  obstacles_active_count: number
+  recorded_by: string | null
+  is_auto_generated: boolean
+  baseline_version_id: string | null
+  monthly_plan_version_id: string | null
+  baseline_item_id: string | null
+  monthly_plan_item_id: string | null
+  planning_source_type: string | null
+  planning_source_version_id: string | null
+  planning_source_item_id: string | null
+  created_at: string
+}
+
+async function writeTaskProgressSnapshotDirect(snapshot: TaskProgressSnapshotWriteRow) {
+  await rawQuery(
+    `WITH planning_lineage AS (
+       SELECT
+         baseline_item.baseline_version_id,
+         monthly_item.monthly_plan_version_id
+       FROM (SELECT 1) AS anchor
+       LEFT JOIN public.task_baseline_items AS baseline_item
+         ON baseline_item.id = $19::uuid
+       LEFT JOIN public.monthly_plan_items AS monthly_item
+         ON monthly_item.id = $20::uuid
+     )
+     INSERT INTO public.task_progress_snapshots (
+       task_id,
+       progress,
+       snapshot_date,
+       event_type,
+       event_source,
+       source_confidence,
+       confirmation_status,
+       confirmed_at,
+       confirmed_by,
+       notes,
+       status,
+       conditions_met_count,
+       conditions_total_count,
+       obstacles_active_count,
+       recorded_by,
+       is_auto_generated,
+       baseline_version_id,
+       monthly_plan_version_id,
+       baseline_item_id,
+       monthly_plan_item_id,
+       planning_source_type,
+       planning_source_version_id,
+       planning_source_item_id,
+       created_at
+     )
+     SELECT
+       $1::uuid,
+       $2::integer,
+       $3::date,
+       $4::text,
+       $5::text,
+       $6::text,
+       $7::text,
+       $8::timestamptz,
+       $9::uuid,
+       $10::text,
+       $11::text,
+       $12::integer,
+       $13::integer,
+       $14::integer,
+       $15::uuid,
+       $16::boolean,
+       COALESCE($17::uuid, planning_lineage.baseline_version_id),
+       COALESCE($18::uuid, planning_lineage.monthly_plan_version_id),
+       $19::uuid,
+       $20::uuid,
+       COALESCE(
+         NULLIF($21::text, ''),
+         CASE
+           WHEN $20::uuid IS NOT NULL THEN 'monthly_plan'
+           WHEN $19::uuid IS NOT NULL THEN 'baseline'
+           ELSE 'execution'
+         END
+       ),
+       COALESCE(
+         $22::uuid,
+         CASE
+           WHEN $20::uuid IS NOT NULL THEN COALESCE($18::uuid, planning_lineage.monthly_plan_version_id)
+           WHEN $19::uuid IS NOT NULL THEN COALESCE($17::uuid, planning_lineage.baseline_version_id)
+           ELSE NULL
+         END
+       ),
+       COALESCE(
+         $23::uuid,
+         CASE
+           WHEN $20::uuid IS NOT NULL THEN $20::uuid
+           WHEN $19::uuid IS NOT NULL THEN $19::uuid
+           ELSE NULL
+         END
+       ),
+       $24::timestamptz
+     FROM planning_lineage
+     ON CONFLICT (task_id, snapshot_date, event_type, event_source)
+     DO UPDATE SET
+       progress = EXCLUDED.progress,
+       source_confidence = EXCLUDED.source_confidence,
+       confirmation_status = EXCLUDED.confirmation_status,
+       confirmed_at = EXCLUDED.confirmed_at,
+       confirmed_by = EXCLUDED.confirmed_by,
+       notes = EXCLUDED.notes,
+       status = EXCLUDED.status,
+       conditions_met_count = EXCLUDED.conditions_met_count,
+       conditions_total_count = EXCLUDED.conditions_total_count,
+       obstacles_active_count = EXCLUDED.obstacles_active_count,
+       recorded_by = EXCLUDED.recorded_by,
+       is_auto_generated = EXCLUDED.is_auto_generated,
+       baseline_version_id = EXCLUDED.baseline_version_id,
+       monthly_plan_version_id = EXCLUDED.monthly_plan_version_id,
+       baseline_item_id = EXCLUDED.baseline_item_id,
+       monthly_plan_item_id = EXCLUDED.monthly_plan_item_id,
+       planning_source_type = EXCLUDED.planning_source_type,
+       planning_source_version_id = EXCLUDED.planning_source_version_id,
+       planning_source_item_id = EXCLUDED.planning_source_item_id,
+       created_at = EXCLUDED.created_at`,
+    [
+      snapshot.task_id,
+      snapshot.progress,
+      snapshot.snapshot_date,
+      snapshot.event_type,
+      snapshot.event_source,
+      snapshot.source_confidence,
+      snapshot.confirmation_status,
+      snapshot.confirmed_at,
+      snapshot.confirmed_by,
+      snapshot.notes,
+      snapshot.status,
+      snapshot.conditions_met_count,
+      snapshot.conditions_total_count,
+      snapshot.obstacles_active_count,
+      snapshot.recorded_by,
+      snapshot.is_auto_generated,
+      snapshot.baseline_version_id,
+      snapshot.monthly_plan_version_id,
+      snapshot.baseline_item_id,
+      snapshot.monthly_plan_item_id,
+      snapshot.planning_source_type,
+      snapshot.planning_source_version_id,
+      snapshot.planning_source_item_id,
+      snapshot.created_at,
+    ],
+  )
+}
+
 interface TaskUpdateOptions {
   allowReopen?: boolean
   skipSnapshotWrite?: boolean
@@ -1689,7 +1852,7 @@ export async function recordTaskProgressSnapshot(task: any, options: TaskSnapsho
   const sourceConfidence = classifyProgressSnapshotSource({ event_source: eventSource })
   const confirmationStatus = options.confirmationStatus
     ?? (options.confirmedAt || options.confirmedBy ? 'confirmed' : 'unconfirmed')
-  const snapshot = {
+  const snapshot: TaskProgressSnapshotWriteRow = {
     task_id: task.id,
     progress: Number(task.progress ?? 0),
     snapshot_date: toDateOnly(task.updated_at),
@@ -1710,79 +1873,87 @@ export async function recordTaskProgressSnapshot(task: any, options: TaskSnapsho
     monthly_plan_version_id: task.monthly_plan_version_id ?? null,
     baseline_item_id: task.baseline_item_id ?? null,
     monthly_plan_item_id: task.monthly_plan_item_id ?? null,
-    planning_source_type: task.planning_source_type ?? 'execution',
+    planning_source_type: task.planning_source_type
+      ?? (task.monthly_plan_item_id ? 'monthly_plan' : task.baseline_item_id ? 'baseline' : 'execution'),
     planning_source_version_id: task.planning_source_version_id ?? null,
-    planning_source_item_id: task.planning_source_item_id ?? null,
+    planning_source_item_id: task.planning_source_item_id
+      ?? task.monthly_plan_item_id
+      ?? task.baseline_item_id
+      ?? null,
     created_at: now(),
   }
 
-  const snapshotTable = supabase.from('task_progress_snapshots') as unknown as SnapshotTableLike
-  const mutation = typeof snapshotTable.upsert === 'function'
-    ? snapshotTable.upsert(snapshot, {
-      onConflict: 'task_id,snapshot_date,event_type,event_source',
-      ignoreDuplicates: false,
-    })
-    : snapshotTable.insert({
-      id: uuidv4(),
-      ...snapshot,
-    })
-  const { error } = await mutation
-  if (error) {
-    const message = String(error.message ?? '')
-    const isUpsertUnsupported = message.includes('no unique or exclusion constraint matching the ON CONFLICT specification')
-    const isDuplicateKey = message.includes('duplicate key value violates unique constraint')
-    if (isUpsertUnsupported || isDuplicateKey) {
-      logger.warn('[dbService] task_progress_snapshots missing unique upsert index or hit duplicate, using select-then-update-or-insert fallback', {
-        taskId: task.id,
-        snapshotDate: snapshot.snapshot_date,
-        eventType: snapshot.event_type,
-        eventSource: snapshot.event_source,
-        reason: isUpsertUnsupported ? 'missing_upsert_index' : 'duplicate_key',
+  if (shouldUseDirectSqlPath() || isDatabaseTransactionActive()) {
+    await writeTaskProgressSnapshotDirect(snapshot)
+  } else {
+    const snapshotTable = supabase.from('task_progress_snapshots') as unknown as SnapshotTableLike
+    const mutation = typeof snapshotTable.upsert === 'function'
+      ? snapshotTable.upsert(snapshot, {
+        onConflict: 'task_id,snapshot_date,event_type,event_source',
+        ignoreDuplicates: false,
       })
-      const { data: existingRows } = await supabase
-        .from('task_progress_snapshots')
-        .select('id')
-        .eq('task_id', snapshot.task_id)
-        .eq('snapshot_date', snapshot.snapshot_date)
-        .eq('event_type', snapshot.event_type)
-        .eq('event_source', snapshot.event_source)
-      const existing = Array.isArray(existingRows) ? existingRows[0] : existingRows
-      if (existing?.id) {
-        const { error: updateErr } = await supabase
-          .from('task_progress_snapshots')
-          .update({
-            progress: snapshot.progress,
-            notes: snapshot.notes,
-            source_confidence: snapshot.source_confidence,
-            confirmation_status: snapshot.confirmation_status,
-            confirmed_at: snapshot.confirmed_at,
-            confirmed_by: snapshot.confirmed_by,
-            status: snapshot.status,
-            conditions_met_count: snapshot.conditions_met_count,
-            conditions_total_count: snapshot.conditions_total_count,
-            obstacles_active_count: snapshot.obstacles_active_count,
-            recorded_by: snapshot.recorded_by,
-            baseline_version_id: snapshot.baseline_version_id,
-            monthly_plan_version_id: snapshot.monthly_plan_version_id,
-            baseline_item_id: snapshot.baseline_item_id,
-            monthly_plan_item_id: snapshot.monthly_plan_item_id,
-            planning_source_type: snapshot.planning_source_type,
-            planning_source_version_id: snapshot.planning_source_version_id,
-            planning_source_item_id: snapshot.planning_source_item_id,
-          })
-          .eq('id', existing.id)
-        if (updateErr) throw new Error(updateErr.message)
-      } else {
-        const { error: insertErr } = await snapshotTable.insert({
-          id: uuidv4(),
-          ...snapshot,
+      : snapshotTable.insert({
+        id: uuidv4(),
+        ...snapshot,
+      })
+    const { error } = await mutation
+    if (error) {
+      const message = String(error.message ?? '')
+      const isUpsertUnsupported = message.includes('no unique or exclusion constraint matching the ON CONFLICT specification')
+      const isDuplicateKey = message.includes('duplicate key value violates unique constraint')
+      if (isUpsertUnsupported || isDuplicateKey) {
+        logger.warn('[dbService] task_progress_snapshots missing unique upsert index or hit duplicate, using select-then-update-or-insert fallback', {
+          taskId: task.id,
+          snapshotDate: snapshot.snapshot_date,
+          eventType: snapshot.event_type,
+          eventSource: snapshot.event_source,
+          reason: isUpsertUnsupported ? 'missing_upsert_index' : 'duplicate_key',
         })
-        if (insertErr && !String(insertErr.message ?? '').includes('duplicate key value violates unique constraint')) {
-          throw new Error(insertErr.message)
+        const { data: existingRows } = await supabase
+          .from('task_progress_snapshots')
+          .select('id')
+          .eq('task_id', snapshot.task_id)
+          .eq('snapshot_date', snapshot.snapshot_date)
+          .eq('event_type', snapshot.event_type)
+          .eq('event_source', snapshot.event_source)
+        const existing = Array.isArray(existingRows) ? existingRows[0] : existingRows
+        if (existing?.id) {
+          const { error: updateErr } = await supabase
+            .from('task_progress_snapshots')
+            .update({
+              progress: snapshot.progress,
+              notes: snapshot.notes,
+              source_confidence: snapshot.source_confidence,
+              confirmation_status: snapshot.confirmation_status,
+              confirmed_at: snapshot.confirmed_at,
+              confirmed_by: snapshot.confirmed_by,
+              status: snapshot.status,
+              conditions_met_count: snapshot.conditions_met_count,
+              conditions_total_count: snapshot.conditions_total_count,
+              obstacles_active_count: snapshot.obstacles_active_count,
+              recorded_by: snapshot.recorded_by,
+              baseline_version_id: snapshot.baseline_version_id,
+              monthly_plan_version_id: snapshot.monthly_plan_version_id,
+              baseline_item_id: snapshot.baseline_item_id,
+              monthly_plan_item_id: snapshot.monthly_plan_item_id,
+              planning_source_type: snapshot.planning_source_type,
+              planning_source_version_id: snapshot.planning_source_version_id,
+              planning_source_item_id: snapshot.planning_source_item_id,
+            })
+            .eq('id', existing.id)
+          if (updateErr) throw new Error(updateErr.message)
+        } else {
+          const { error: insertErr } = await snapshotTable.insert({
+            id: uuidv4(),
+            ...snapshot,
+          })
+          if (insertErr && !String(insertErr.message ?? '').includes('duplicate key value violates unique constraint')) {
+            throw new Error(insertErr.message)
+          }
         }
+      } else {
+        throw new Error(error.message)
       }
-    } else {
-      throw new Error(error.message)
     }
   }
 

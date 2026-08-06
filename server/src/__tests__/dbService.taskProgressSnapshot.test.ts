@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const state = vi.hoisted(() => {
+  const query = vi.fn(async (_sql: string, _params?: any[]) => ({ rows: [] }))
   const upsert = vi.fn(async () => ({ error: null }))
   const insert = vi.fn(async () => ({ error: null }))
   const select = vi.fn(() => ({
@@ -19,6 +20,7 @@ const state = vi.hoisted(() => {
   }))
 
   return {
+    query,
     from,
     upsert,
     insert,
@@ -33,7 +35,8 @@ vi.mock('@supabase/supabase-js', () => ({
 }))
 
 vi.mock('../database.js', () => ({
-  query: vi.fn(),
+  isDatabaseTransactionActive: vi.fn(() => false),
+  query: state.query,
 }))
 
 vi.mock('../middleware/logger.js', () => ({
@@ -47,6 +50,8 @@ vi.mock('../middleware/logger.js', () => ({
 
 describe('dbService recordTaskProgressSnapshot', () => {
   beforeEach(() => {
+    delete process.env.DB_SQL_EXECUTION_MODE
+    state.query.mockClear()
     state.from.mockClear()
     state.upsert.mockClear()
     state.insert.mockClear()
@@ -74,5 +79,34 @@ describe('dbService recordTaskProgressSnapshot', () => {
         onConflict: 'task_id,snapshot_date,event_type,event_source',
       }),
     )
+  })
+
+  it('uses direct SQL and derives planning lineage from physical task item anchors in worker mode', async () => {
+    process.env.DB_SQL_EXECUTION_MODE = 'direct'
+    const { recordTaskProgressSnapshot } = await import('../services/dbService.js')
+
+    await recordTaskProgressSnapshot({
+      id: 'task-direct-snapshot',
+      project_id: '',
+      updated_at: '2026-08-06T08:30:00.000Z',
+      progress: 45,
+      status: 'in_progress',
+      baseline_item_id: '11111111-1111-4111-8111-111111111111',
+      monthly_plan_item_id: '22222222-2222-4222-8222-222222222222',
+    })
+
+    expect(state.query).toHaveBeenCalledTimes(1)
+    const [sql, params] = state.query.mock.calls[0]
+    expect(sql).toContain('INSERT INTO public.task_progress_snapshots')
+    expect(sql).toContain('LEFT JOIN public.task_baseline_items')
+    expect(sql).toContain('LEFT JOIN public.monthly_plan_items')
+    expect(sql).toContain('created_at = EXCLUDED.created_at')
+    expect(params).toEqual(expect.arrayContaining([
+      'task-direct-snapshot',
+      '11111111-1111-4111-8111-111111111111',
+      '22222222-2222-4222-8222-222222222222',
+    ]))
+    expect(params[20]).toBe('monthly_plan')
+    expect(state.upsert).not.toHaveBeenCalled()
   })
 })
