@@ -151,6 +151,14 @@ if (!Number.isInteger(recoveryAttempts) || recoveryAttempts < 1 || recoveryAttem
 if (!Number.isInteger(recoveryDelayMs) || recoveryDelayMs < 10 || recoveryDelayMs > 10_000) {
   throw new Error('recovery-delay-ms must be an integer between 10 and 10000')
 }
+const generationPollAttempts = Number(args.get('generation-poll-attempts') ?? 180)
+const generationPollDelayMs = Number(args.get('generation-poll-delay-ms') ?? 2_000)
+if (!Number.isInteger(generationPollAttempts) || generationPollAttempts < 1 || generationPollAttempts > 300) {
+  throw new Error('generation-poll-attempts must be an integer between 1 and 300')
+}
+if (!Number.isInteger(generationPollDelayMs) || generationPollDelayMs < 10 || generationPollDelayMs > 10_000) {
+  throw new Error('generation-poll-delay-ms must be an integer between 10 and 10000')
+}
 const runId = `${targetEnvironment}-baseline-${Date.now()}`
 const diagnosticProjectName = `Disposable Residential Baseline ${runId}`
 const plannedProjectId = String(args.get('project-id') ?? randomUUID()).trim()
@@ -542,6 +550,47 @@ function assertApi(label, apiResult, allowedStatuses) {
     throw apiFailure(label, apiResult.response, apiResult.body)
   }
   return apiResult.body?.data
+}
+
+async function waitForWizardGeneration(targetProjectId, attemptId) {
+  let lastState = 'queued'
+  for (let attempt = 1; attempt <= generationPollAttempts; attempt += 1) {
+    const statusCall = await apiRequest(
+      'GET',
+      `/api/projects/${targetProjectId}/wizard/generation/${encodeURIComponent(attemptId)}`,
+    )
+    const generation = assertApi('read wizard generation status', statusCall, [200])
+    const observedAttemptId = requireValue(generation?.attemptId, 'wizard generation status attempt id')
+    if (observedAttemptId !== attemptId) {
+      throw new Error('wizard generation status returned a different attempt id')
+    }
+
+    lastState = requireValue(generation?.state, 'wizard generation state')
+    result.steps.commitWizardGeneration = {
+      ...result.steps.commitWizardGeneration,
+      status: lastState === 'failed' ? 'fail' : 'running',
+      generationState: lastState,
+      generationPollCount: attempt,
+    }
+    if (lastState === 'completed') return { generation, attempts: attempt }
+    if (lastState === 'failed') {
+      const errorCode = String(generation?.errorCode ?? 'WIZARD_GENERATION_FAILED').trim()
+        || 'WIZARD_GENERATION_FAILED'
+      result.steps.commitWizardGeneration.errorCode = errorCode
+      writeResultReport()
+      throw new Error(`wizard generation failed: code=${errorCode}`)
+    }
+    if (!['queued', 'running'].includes(lastState)) {
+      throw new Error(`wizard generation returned unsupported state: ${lastState}`)
+    }
+    if (attempt < generationPollAttempts) {
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, generationPollDelayMs))
+    }
+  }
+
+  throw new Error(
+    `wizard generation did not complete after ${generationPollAttempts} status checks; lastState=${lastState}`,
+  )
 }
 
 async function authenticate(expectedCompanyId = requestedCompanyId) {
@@ -1209,19 +1258,46 @@ try {
   }
   writeResultReport()
 
+  const asyncGeneration = !productionLive
   const committedCall = await apiRequest('POST', '/api/projects/wizard', {
     ...createRequest,
     newProjectId: undefined,
     projectId,
     commit: true,
-    asyncGeneration: false,
+    asyncGeneration,
   })
-  const committed = assertApi('commit wizard generation', committedCall, [200])
-  const generation = committed?.generation ?? {}
+  const committed = assertApi('commit wizard generation', committedCall, asyncGeneration ? [202] : [200])
+  let generation = committed?.generation ?? {}
+  let generationAttemptId = null
+  let generationPollCount = null
+  if (asyncGeneration) {
+    generationAttemptId = requireValue(generation.attemptId, 'wizard generation attempt id')
+    const queuedState = requireValue(generation.state, 'queued wizard generation state')
+    if (queuedState !== 'queued') {
+      throw new Error(`queued wizard generation returned unexpected state: ${queuedState}`)
+    }
+    result.steps.commitWizardGeneration = {
+      status: 'running',
+      httpStatus: committedCall.response.status,
+      asyncGeneration: true,
+      attemptId: generationAttemptId,
+      generationState: queuedState,
+      generationPollCount: 0,
+      generationBatchId: null,
+    }
+    writeResultReport()
+    const completedGeneration = await waitForWizardGeneration(projectId, generationAttemptId)
+    generation = completedGeneration.generation
+    generationPollCount = completedGeneration.attempts
+  }
   result.generationBatchId = requireValue(generation.generationBatchId, 'generation batch id')
   result.steps.commitWizardGeneration = {
     status: 'pass',
     httpStatus: committedCall.response.status,
+    asyncGeneration,
+    attemptId: generationAttemptId,
+    generationState: asyncGeneration ? generation.state : 'completed',
+    generationPollCount,
     generationBatchId: result.generationBatchId,
     generatedRowCount: generation.generatedRowCount ?? null,
     createdTaskCount: generation.createdTaskCount ?? null,

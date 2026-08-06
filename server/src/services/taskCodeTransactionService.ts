@@ -7,6 +7,8 @@ import { hasAnyScopeObjectId } from './engineeringObjectService.js'
 import { createLineageBatchInTransaction, recordLineageInTransaction } from './dataLineageService.js'
 import { mergeWbsTaskStructureGovernanceMetadata } from './wbsTaskStructureGovernancePipelineService.js'
 import {
+  buildChangedExecutionFactInputs,
+  recordInitialExecutionFactsBatch,
   recordChangedExecutionFacts,
   type ExecutionFactProjectionChange,
 } from './executionFactGovernanceService.js'
@@ -96,6 +98,32 @@ async function recordTaskExecutionFactsInTransaction(
     correctionReason: input.correctionReason ?? null,
     changes: buildTaskExecutionFactChanges(input.previous, input.next, input.observedAt),
   }, {
+    queryExec: async <T = Record<string, unknown>>(sql: string, params: unknown[] = []) => {
+      const result = await client.query(sql, params)
+      return (result.rows ?? []) as T[]
+    },
+    isTransactionActive: () => true,
+  })
+}
+
+async function recordInitialTaskExecutionFactsBatchInTransaction(
+  client: TransactionClientLike,
+  inputs: readonly TransactionTaskInput[],
+  actorId: string | null | undefined,
+  observedAt: string,
+) {
+  const facts = inputs.flatMap((input) => buildChangedExecutionFactInputs({
+    projectId: input.project_id,
+    entityType: 'task',
+    entityId: String(input.id),
+    sourceModule: 'taskCodeTransactionService',
+    sourceMutationId: `task:${input.id}:version:1`,
+    actorUserId: actorId ?? null,
+    observedAt,
+    correctionReason: null,
+    changes: buildTaskExecutionFactChanges(null, input as unknown as Record<string, unknown>, observedAt),
+  }))
+  await recordInitialExecutionFactsBatch(facts, {
     queryExec: async <T = Record<string, unknown>>(sql: string, params: unknown[] = []) => {
       const result = await client.query(sql, params)
       return (result.rows ?? []) as T[]
@@ -784,17 +812,7 @@ export async function createTasksWithCodeInWizardBatchTransaction(
       )
     }
 
-    for (const input of inputs) {
-      await recordTaskExecutionFactsInTransaction(client, {
-        taskId: String(input.id),
-        projectId,
-        previous: null,
-        next: input as unknown as Record<string, unknown>,
-        version: 1,
-        actorId,
-        observedAt: ts,
-      })
-    }
+    await recordInitialTaskExecutionFactsBatchInTransaction(client, inputs, actorId, ts)
 
     if (ownsClient) await client.query('COMMIT')
     invalidateTaskReadCache(projectId)

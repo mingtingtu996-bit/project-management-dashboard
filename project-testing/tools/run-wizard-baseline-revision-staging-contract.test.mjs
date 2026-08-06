@@ -973,12 +973,15 @@ test('ordinary staging user completes the full wizard and baseline smoke when ad
 
   const companyId = '11111111-1111-4111-8111-111111111111'
   const projectId = '22222222-2222-4222-8222-222222222222'
+  const generationAttemptId = 'generation-attempt-1'
   const baselineId = 'baseline-1'
   const revisionId = 'revision-1'
   let project = null
   let revisionActive = false
   let accuracyRequestCount = 0
   let previewRequestCount = 0
+  let generationStatusRequestCount = 0
+  let commitRequestBody = null
   let baseline = {
     id: baselineId,
     title: 'Candidate baseline',
@@ -1048,21 +1051,45 @@ test('ordinary staging user completes the full wizard and baseline smoke when ad
       }
       assert.equal(requestBody.projectId, projectId)
       assert.equal(requestBody.commit, true)
-      send(200, {
+      commitRequestBody = requestBody
+      send(202, {
         generation: {
+          state: 'queued',
+          attemptId: generationAttemptId,
+        },
+      })
+      return
+    }
+    if (
+      req.method === 'GET'
+      && requestUrl.pathname === `/api/projects/${projectId}/wizard/generation/${generationAttemptId}`
+    ) {
+      generationStatusRequestCount += 1
+      if (generationStatusRequestCount === 1) {
+        send(200, {
+          projectId,
+          attemptId: generationAttemptId,
+          state: 'running',
           generationBatchId: 'generation-batch-1',
-          generatedRowCount: 2,
-          createdTaskCount: 2,
-          candidateBaseline: { baselineId },
-          executableDefaultMasterPlanAssembly: {
-            status: 'executable_default_master_plan_ready',
-            assetInventoryShortfallAccepted: false,
-          },
-          planQualityDiagnostics: {
-            status: 'ready',
-            runtimeApprovalRequired: false,
-            blocksWizardCommit: false,
-          },
+        })
+        return
+      }
+      send(200, {
+        projectId,
+        attemptId: generationAttemptId,
+        state: 'completed',
+        generationBatchId: 'generation-batch-1',
+        generatedRowCount: 2,
+        createdTaskCount: 2,
+        candidateBaseline: { baselineId },
+        executableDefaultMasterPlanAssembly: {
+          status: 'executable_default_master_plan_ready',
+          assetInventoryShortfallAccepted: false,
+        },
+        planQualityDiagnostics: {
+          status: 'ready',
+          runtimeApprovalRequired: false,
+          blocksWizardCommit: false,
         },
       })
       return
@@ -1179,6 +1206,8 @@ test('ordinary staging user completes the full wizard and baseline smoke when ad
       '--public-origin', 'https://workbuddy.example.com',
       '--project-id', projectId,
       '--report', reportPath,
+      '--generation-poll-attempts', '5',
+      '--generation-poll-delay-ms', '10',
     ], { cwd: workspaceRoot })
     let stderr = ''
     child.stderr.on('data', (chunk) => { stderr += chunk })
@@ -1192,6 +1221,8 @@ test('ordinary staging user completes the full wizard and baseline smoke when ad
   assert.equal(childResult.code, 0, childResult.stderr || childReport?.error?.message)
   assert.equal(accuracyRequestCount, 1)
   assert.equal(previewRequestCount, canonicalBusinessPreviewCases.length)
+  assert.equal(commitRequestBody?.asyncGeneration, true)
+  assert.equal(generationStatusRequestCount, 2)
   const report = childReport
   assert.equal(report.status, 'pass')
   assert.equal(report.steps.durationAccuracyReadback.status, 'unavailable')
@@ -1211,6 +1242,9 @@ test('ordinary staging user completes the full wizard and baseline smoke when ad
   assert.equal(hotelPreviewEvidence.minimumScheduleRowCount, 60)
   assert.equal(hotelPreviewEvidence.operationalRowFloor, 60)
   assert.equal(report.steps.commitWizardGeneration.status, 'pass')
+  assert.equal(report.steps.commitWizardGeneration.httpStatus, 202)
+  assert.equal(report.steps.commitWizardGeneration.attemptId, generationAttemptId)
+  assert.equal(report.steps.commitWizardGeneration.generationState, 'completed')
   assert.equal(report.steps.taskDependencyReadback.status, 'pass')
   assert.equal(report.steps.criticalPathReadback.status, 'pass')
   assert.equal(report.steps.publishBaseline.status, 'pass')
@@ -1219,4 +1253,151 @@ test('ordinary staging user completes the full wizard and baseline smoke when ad
   assert.equal(report.cleanup.status, 'pass')
   assert.equal(report.cleanup.projectPhysicallyDeleted, true)
   assert.equal(project, null)
+})
+
+test('staging smoke fails closed and cleans up when async wizard generation fails', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wizard-async-generation-failure-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+
+  const companyId = '11111111-1111-4111-8111-111111111111'
+  const projectId = '22222222-2222-4222-8222-222222222222'
+  const generationAttemptId = 'generation-attempt-failed'
+  let project = null
+  let generationStatusRequestCount = 0
+  let downstreamReadCount = 0
+
+  const server = http.createServer(async (req, res) => {
+    const chunks = []
+    for await (const chunk of req) chunks.push(chunk)
+    const requestBody = chunks.length > 0 ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : null
+    const requestUrl = new URL(req.url, 'http://127.0.0.1')
+    const send = (status, data) => {
+      res.writeHead(status, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ success: status < 400, data }))
+    }
+    const sendError = (status, code, message) => {
+      res.writeHead(status, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ success: false, error: { code, message } }))
+    }
+
+    if (req.method === 'POST' && requestUrl.pathname === '/api/auth/login') {
+      send(200, { token: 'test-token', user: { currentCompanyId: companyId } })
+      return
+    }
+    if (req.method === 'GET' && requestUrl.pathname === '/api/admin/duration-accuracy/summary') {
+      sendError(
+        403,
+        'FORBIDDEN',
+        'Duration accuracy diagnostics are available to company administrators only.',
+      )
+      return
+    }
+    if (req.method === 'POST' && requestUrl.pathname === '/api/projects/wizard/preview') {
+      const previewCase = canonicalBusinessPreviewCases.find((candidate) => (
+        candidate.businessType === requestBody.businessType
+      ))
+      assert.ok(previewCase, `unexpected preview business type: ${requestBody.businessType}`)
+      send(200, buildReadyPreviewResponse(previewCase))
+      return
+    }
+    if (req.method === 'POST' && requestUrl.pathname === '/api/projects/wizard') {
+      if (requestBody.commit === false) {
+        project = {
+          id: projectId,
+          name: requestBody.name,
+          metadata: requestBody.metadata,
+        }
+        send(201, { id: projectId, projectId })
+        return
+      }
+      assert.equal(requestBody.asyncGeneration, true)
+      send(202, {
+        generation: {
+          state: 'queued',
+          attemptId: generationAttemptId,
+        },
+      })
+      return
+    }
+    if (
+      req.method === 'GET'
+      && requestUrl.pathname === `/api/projects/${projectId}/wizard/generation/${generationAttemptId}`
+    ) {
+      generationStatusRequestCount += 1
+      send(200, {
+        projectId,
+        attemptId: generationAttemptId,
+        state: 'failed',
+        errorCode: 'EXECUTION_FACT_PERMISSION_DENIED',
+        error: 'sensitive postgres permission details',
+      })
+      return
+    }
+    if (requestUrl.pathname === `/api/projects/${projectId}`) {
+      if (req.method === 'GET') {
+        if (project) send(200, project)
+        else sendError(404, 'NOT_FOUND', 'project not found')
+        return
+      }
+      if (req.method === 'DELETE') {
+        project = null
+        send(200, { id: projectId })
+        return
+      }
+    }
+    if (
+      requestUrl.pathname === `/api/projects/${projectId}/wizard/artifact-inventory`
+      || requestUrl.pathname === '/api/tasks'
+      || requestUrl.pathname === `/api/projects/${projectId}/critical-path`
+    ) {
+      downstreamReadCount += 1
+    }
+    sendError(404, 'NOT_FOUND', 'not found')
+  })
+  t.after(() => new Promise((resolveClose) => server.close(resolveClose)))
+  await new Promise((resolveListen) => server.listen(0, '127.0.0.1', resolveListen))
+  const address = server.address()
+  assert.equal(typeof address, 'object')
+
+  const envPath = path.join(root, 'staging.env')
+  const reportPath = path.join(root, 'report.json')
+  fs.writeFileSync(envPath, [
+    'SUPABASE_URL=https://stagingref.supabase.co',
+    'TEST_USERNAME=smoke@example.com',
+    'TEST_USER_PASSWORD=test-password',
+    '',
+  ].join('\n'))
+
+  const childResult = await new Promise((resolveChild, rejectChild) => {
+    const child = spawn(process.execPath, [
+      smokeScriptPath,
+      '--env-file', envPath,
+      '--api-base-url', `http://127.0.0.1:${address.port}`,
+      '--public-origin', 'https://workbuddy.example.com',
+      '--project-id', projectId,
+      '--report', reportPath,
+      '--generation-poll-attempts', '2',
+      '--generation-poll-delay-ms', '10',
+    ], { cwd: workspaceRoot })
+    let stderr = ''
+    child.stderr.on('data', (chunk) => { stderr += chunk })
+    child.once('error', rejectChild)
+    child.once('close', (code) => resolveChild({ code, stderr }))
+  })
+
+  assert.equal(childResult.code, 1)
+  assert.equal(generationStatusRequestCount, 1)
+  assert.equal(downstreamReadCount, 0)
+  assert.equal(project, null)
+  const reportText = fs.readFileSync(reportPath, 'utf8')
+  const report = JSON.parse(reportText)
+  assert.equal(report.status, 'fail')
+  assert.equal(report.steps.commitWizardGeneration.status, 'fail')
+  assert.equal(report.steps.commitWizardGeneration.httpStatus, 202)
+  assert.equal(report.steps.commitWizardGeneration.attemptId, generationAttemptId)
+  assert.equal(report.steps.commitWizardGeneration.generationState, 'failed')
+  assert.equal(report.steps.commitWizardGeneration.errorCode, 'EXECUTION_FACT_PERMISSION_DENIED')
+  assert.equal(report.cleanup.status, 'pass')
+  assert.equal(report.cleanup.projectPhysicallyDeleted, true)
+  assert.equal(reportText.includes('sensitive postgres permission details'), false)
 })

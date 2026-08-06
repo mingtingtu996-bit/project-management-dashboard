@@ -169,6 +169,18 @@ const ENTITY_SCOPE_QUERIES: Record<ExecutionFactEntityType, string> = {
   acceptance_plan: 'SELECT entity.project_id FROM public.acceptance_plans entity WHERE entity.id = $1 AND entity.project_id = $2 FOR KEY SHARE',
 }
 
+const ENTITY_SCOPE_BATCH_QUERIES: Record<ExecutionFactEntityType, string> = {
+  task: 'SELECT entity.id, entity.project_id FROM public.tasks entity WHERE entity.id = ANY($1::uuid[]) AND entity.project_id = $2',
+  risk: 'SELECT entity.id, entity.project_id FROM public.risks entity WHERE entity.id = ANY($1::uuid[]) AND entity.project_id = $2',
+  issue: 'SELECT entity.id, entity.project_id FROM public.issues entity WHERE entity.id = ANY($1::uuid[]) AND entity.project_id = $2',
+  material_batch: 'SELECT entity.id, entity.project_id FROM public.project_materials entity WHERE entity.id = ANY($1::uuid[]) AND entity.project_id = $2',
+  drawing_version: 'SELECT entity.id, entity.project_id FROM public.drawing_versions entity WHERE entity.id = ANY($1::uuid[]) AND entity.project_id = $2',
+  certificate_work_item: 'SELECT entity.id, entity.project_id FROM public.certificate_work_items entity WHERE entity.id = ANY($1::uuid[]) AND entity.project_id = $2',
+  acceptance_plan: 'SELECT entity.id, entity.project_id FROM public.acceptance_plans entity WHERE entity.id = ANY($1::uuid[]) AND entity.project_id = $2',
+}
+
+const INITIAL_EXECUTION_FACT_BATCH_SIZE = 25
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 const DATE_FACT_TYPES = new Set<ExecutionFactType>([
@@ -529,6 +541,145 @@ export async function recordChangedExecutionFacts(
   return results
 }
 
+export async function recordInitialExecutionFactsBatch(
+  rawInputs: readonly RecordExecutionFactInput[],
+  dependencies: ExecutionFactDependencies = {},
+): Promise<RecordExecutionFactResult[]> {
+  const transactionActive = dependencies.isTransactionActive ?? isDatabaseTransactionActive
+  if (!transactionActive()) {
+    throw executionFactError(
+      'EXECUTION_FACT_TRANSACTION_REQUIRED',
+      'execution facts and compatibility projections must share one database transaction',
+      500,
+    )
+  }
+  if (rawInputs.length === 0) return []
+
+  const inputs = rawInputs.map(normalizeInput)
+  if (inputs.some((input) => input.correction)) {
+    throw executionFactError(
+      'EXECUTION_FACT_BATCH_INITIAL_REQUIRED',
+      'initial execution fact batches cannot contain corrections',
+    )
+  }
+
+  const projectIds = Array.from(new Set(inputs.map((input) => input.projectId)))
+  const entityTypes = Array.from(new Set(inputs.map((input) => input.entityType)))
+  if (projectIds.length !== 1 || entityTypes.length !== 1) {
+    throw executionFactError(
+      'EXECUTION_FACT_BATCH_SCOPE_MISMATCH',
+      'initial execution fact batches must target one project and one entity type',
+    )
+  }
+
+  const idempotencyKeys = inputs.map((input) => input.idempotencyKey)
+  if (new Set(idempotencyKeys).size !== idempotencyKeys.length) {
+    throw executionFactError(
+      'EXECUTION_FACT_IDEMPOTENCY_CONFLICT',
+      'initial execution fact batches cannot repeat an idempotency key',
+      409,
+    )
+  }
+  const streamKeys = inputs.map((input) => [
+    input.projectId,
+    input.entityType,
+    input.entityId,
+    input.factType,
+  ].join(':'))
+  if (new Set(streamKeys).size !== streamKeys.length) {
+    throw executionFactError(
+      'EXECUTION_FACT_BATCH_STREAM_DUPLICATE',
+      'initial execution fact batches cannot write the same fact stream twice',
+      409,
+    )
+  }
+
+  const queryExec = dependencies.queryExec ?? defaultQueryExec
+  const projectId = projectIds[0]
+  const entityType = entityTypes[0]
+  const projectRows = await queryExec<{ company_id?: string | null }>(
+    'SELECT project.company_id FROM public.projects project WHERE project.id = $1',
+    [projectId],
+  )
+  const authoritativeCompanyId = normalizeText(projectRows[0]?.company_id)
+  if (!authoritativeCompanyId) {
+    throw executionFactError('EXECUTION_FACT_PROJECT_NOT_FOUND', 'execution fact project was not found', 404)
+  }
+  if (inputs.some((input) => input.companyId && input.companyId !== authoritativeCompanyId)) {
+    throw executionFactError('EXECUTION_FACT_TENANT_MISMATCH', 'execution fact project does not belong to the supplied company', 403)
+  }
+
+  const entityIds = Array.from(new Set(inputs.map((input) => input.entityId)))
+  const entityRows = await queryExec<{ id?: string | null; project_id?: string | null }>(
+    ENTITY_SCOPE_BATCH_QUERIES[entityType],
+    [entityIds, projectId],
+  )
+  const scopedEntityIds = new Set(entityRows
+    .filter((row) => normalizeText(row.project_id) === projectId)
+    .map((row) => normalizeText(row.id))
+    .filter(Boolean))
+  if (entityIds.some((entityId) => !scopedEntityIds.has(entityId))) {
+    throw executionFactError('EXECUTION_FACT_ENTITY_SCOPE_MISMATCH', 'execution fact entity does not belong to the supplied project', 403)
+  }
+
+  const createdByIdempotencyKey = new Map<string, ExecutionFactEvent>()
+  for (let index = 0; index < inputs.length; index += INITIAL_EXECUTION_FACT_BATCH_SIZE) {
+    const chunk = inputs.slice(index, index + INITIAL_EXECUTION_FACT_BATCH_SIZE)
+    const values: unknown[] = []
+    const valueGroups = chunk.map((input) => {
+      const start = values.length + 1
+      values.push(
+        authoritativeCompanyId,
+        input.projectId,
+        input.entityType,
+        input.entityId,
+        input.factType,
+        stableJson(input.value),
+        input.effectiveAt,
+        input.observedAt,
+        input.sourceModule,
+        input.sourceEventId,
+        input.actorUserId,
+        stableJson(input.evidenceRefs),
+        input.confidence,
+        input.idempotencyKey,
+      )
+      return `(
+        $${start}::uuid, $${start + 1}::uuid, $${start + 2}::text, $${start + 3}::uuid,
+        $${start + 4}::text, $${start + 5}::jsonb, $${start + 6}::timestamptz, $${start + 7}::timestamptz,
+        $${start + 8}::text, $${start + 9}::text, $${start + 10}::uuid, $${start + 11}::jsonb,
+        $${start + 12}::numeric, NULL, 'initial', NULL, $${start + 13}::text
+      )`
+    })
+    // database-query-dynamic-approved: only placeholder groups are generated; every fact value remains bound.
+    const insertedRows = await queryExec<Record<string, unknown>>(
+      `INSERT INTO public.execution_fact_events (
+         company_id, project_id, entity_type, entity_id, fact_type, fact_value,
+         effective_at, observed_at, source_module, source_event_id, actor_user_id,
+         evidence_refs, confidence, supersedes_event_id, supersession_kind,
+         correction_reason, idempotency_key
+       ) VALUES ${valueGroups.join(', ')}
+       RETURNING *`,
+      values,
+    )
+    if (insertedRows.length !== chunk.length) {
+      throw executionFactError('EXECUTION_FACT_PERSISTENCE_FAILED', 'execution fact batch insert returned an incomplete result', 500)
+    }
+    for (const row of insertedRows) {
+      const event = rowToEvent(row)
+      createdByIdempotencyKey.set(event.idempotencyKey, event)
+    }
+  }
+
+  return inputs.map((input) => {
+    const event = createdByIdempotencyKey.get(input.idempotencyKey)
+    if (!event) {
+      throw executionFactError('EXECUTION_FACT_PERSISTENCE_FAILED', 'execution fact batch insert omitted a requested event', 500)
+    }
+    return { event, disposition: 'created' }
+  })
+}
+
 export async function recordExecutionFact(
   rawInput: RecordExecutionFactInput,
   dependencies: ExecutionFactDependencies = {},
@@ -564,12 +715,12 @@ export async function recordExecutionFact(
     throw executionFactError('EXECUTION_FACT_ENTITY_SCOPE_MISMATCH', 'execution fact entity does not belong to the supplied project', 403)
   }
 
+  // Migration 326 keeps the runtime role insert-only and serializes each fact stream in the INSERT trigger.
   const existingRows = await queryExec<Record<string, unknown>>(
     `SELECT event.*
        FROM public.execution_fact_events event
       WHERE event.company_id = $1
-        AND event.idempotency_key = $2
-      FOR UPDATE`,
+        AND event.idempotency_key = $2`,
     [authoritativeCompanyId, input.idempotencyKey],
   )
   if (existingRows[0]) {
@@ -592,8 +743,7 @@ export async function recordExecutionFact(
            WHERE successor.supersedes_event_id = event.id
         )
       ORDER BY event.effective_at DESC, event.observed_at DESC, event.id DESC
-      LIMIT 1
-      FOR UPDATE`,
+      LIMIT 1`,
     [authoritativeCompanyId, input.projectId, input.entityType, input.entityId, input.factType],
   )
   const current = currentRows[0] ? rowToEvent(currentRows[0]) : null
