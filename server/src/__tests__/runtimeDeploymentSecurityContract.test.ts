@@ -32,8 +32,10 @@ describe('runtime deployment security contract', () => {
 
     expect(apiSection).toContain('RUNTIME_ROLE: api')
     expect(apiSection).toContain('SKIP_SCHEDULER_BOOT: "true"')
+    expect(apiSection).not.toContain('DB_SQL_EXECUTION_MODE: direct')
     expect(workerSection).toContain('RUNTIME_ROLE: worker')
     expect(workerSection).toContain('SKIP_SCHEDULER_BOOT: "false"')
+    expect(workerSection).toContain('DB_SQL_EXECUTION_MODE: direct')
     expect(workerSection).toContain('DB_POOL_MAX: "5"')
     expect(workerSection).toContain('DB_POOL_WARM_CONNECTIONS: "1"')
     expect(workerSection).not.toMatch(/^\s+ports:/m)

@@ -61,13 +61,8 @@ async function loadProjectSnapshotDrift(projectId: string) {
       'progress',
       'status',
       'updated_at',
-      'baseline_version_id',
-      'monthly_plan_version_id',
       'baseline_item_id',
       'monthly_plan_item_id',
-      'planning_source_type',
-      'planning_source_version_id',
-      'planning_source_item_id',
     ],
   })
   const snapshots = await listTaskProgressSnapshotsByTaskIds(tasks.map((task) => task.id))

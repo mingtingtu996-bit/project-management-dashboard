@@ -64,6 +64,22 @@ describe('task progress snapshot reconciliation', () => {
     expect(mocks.recordTaskProgressSnapshot).not.toHaveBeenCalled()
   })
 
+  it('loads only physical task columns and keeps planning lineage anchored by item ids', async () => {
+    await inspectProjectTaskProgressSnapshotDrift('project-1')
+
+    expect(mocks.getTasks).toHaveBeenCalledWith('project-1', {
+      columns: [
+        'id',
+        'project_id',
+        'progress',
+        'status',
+        'updated_at',
+        'baseline_item_id',
+        'monthly_plan_item_id',
+      ],
+    })
+  })
+
   it('writes an auditable system reconciliation event for every drifted task', async () => {
     const result = await reconcileProjectTaskProgressSnapshots('project-1')
 

@@ -407,6 +407,27 @@ describe('constructionOrganizationPlanNetworkRuntimeEvidenceJob', () => {
     expect(observedSql).toContain("rco.observation_context->>'optionId' =")
   })
 
+  it('compares JSON project identities to UUID publication identities as text', async () => {
+    let observedSql = ''
+    const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> => {
+      observedSql = sql
+      return [] as T[]
+    }
+
+    await collectConstructionOrganizationPlanNetworkRuntimeEvidenceCandidates(queryExec)
+
+    for (const source of [
+      "o.metadata->>'projectId'",
+      "a.action_context->>'projectId'",
+      "rco.observation_context->>'projectId'",
+      "impact.event_payload->>'projectId'",
+      "rollback.event_payload->>'projectId'",
+    ]) {
+      expect(observedSql).toContain(`${source} = p.project_id::text`)
+    }
+    expect(observedSql).not.toMatch(/->>'projectId' = p\.project_id(?!::text)/)
+  })
+
   it('collects candidates only from site adoption decisions with matching option-network identity', async () => {
     let observedSql = ''
     const queryExec = async <T = Record<string, unknown>>(sql: string, _params: unknown[] = []): Promise<T[]> => {

@@ -57,6 +57,7 @@ services:
       SKIP_SCHEDULER_BOOT: "false"
       SKIP_REFERENCE_DATA_BOOTSTRAP: "true"
       SKIP_READ_MODEL_WARMUP: "true"
+      DB_SQL_EXECUTION_MODE: direct
       DB_POOL_MAX: "5"
       DB_POOL_WARM_CONNECTIONS: "1"
     healthcheck:

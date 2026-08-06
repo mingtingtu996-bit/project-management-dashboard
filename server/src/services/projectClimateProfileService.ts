@@ -1,7 +1,8 @@
 import { createHmac } from 'node:crypto'
 
+import { query as rawQuery } from '../database.js'
 import { logger } from '../middleware/logger.js'
-import { supabase } from './dbService.js'
+import { supabase, usesDirectSqlRuntimePath } from './dbService.js'
 import { listActiveProjectIds } from './activeProjectService.js'
 import {
   V1474_REGIONAL_CLIMATE_RULE_SEED,
@@ -268,6 +269,12 @@ function normalizeNumber(value: unknown): number | null {
   if (value === null || value === undefined || value === '') return null
   const numberValue = Number(String(value).replace(/[^\d.-]/g, ''))
   return Number.isFinite(numberValue) && Math.abs(numberValue) < 999 ? numberValue : null
+}
+
+async function queryClimateRows<T>(sql: string, params: unknown[] = []) {
+  // database-query-dynamic-approved: local adapter executes only this service's fixed, parameterized climate SQL templates.
+  const result = await rawQuery(sql, params as any[])
+  return result.rows as T[]
 }
 
 function readPositiveIntegerEnv(name: string, fallback: number) {
@@ -829,6 +836,28 @@ async function loadRuleFromDatabase(input: { province?: string | null; city?: st
   if (!province && !city && !adminCode) return null
 
   try {
+    if (usesDirectSqlRuntimePath()) {
+      const rows = await queryClimateRows<RegionalClimateRuleRow>(
+        `SELECT *
+         FROM public.regional_climate_rules
+         WHERE status = 'active'
+           AND (
+             ($1::text IS NOT NULL AND admin_code = $1::text)
+             OR ($2::text IS NOT NULL AND LOWER(city) = LOWER($2::text))
+             OR ($3::text IS NOT NULL AND LOWER(province) = LOWER($3::text))
+           )
+         ORDER BY CASE
+           WHEN $1::text IS NOT NULL AND admin_code = $1::text THEN 0
+           WHEN $2::text IS NOT NULL AND LOWER(city) = LOWER($2::text) THEN 1
+           WHEN $3::text IS NOT NULL AND LOWER(province) = LOWER($3::text) THEN 2
+           ELSE 3
+         END
+         LIMIT 50`,
+        [adminCode || null, city || null, province || null],
+      )
+      return rows[0] ?? null
+    }
+
     let query = (supabase as any)
       .from('regional_climate_rules')
       .select('*')
@@ -856,9 +885,140 @@ async function loadRuleFromDatabase(input: { province?: string | null; city?: st
   }
 }
 
+async function bootstrapRegionalClimateRulesDirect() {
+  const seedRows = V1474_REGIONAL_CLIMATE_RULE_SEED.map((rule) => ({
+    province: rule.province,
+    city: rule.city ?? null,
+    admin_code: rule.adminCode ?? null,
+    climate_region: rule.climateRegion,
+    thermal_zone: rule.thermalZone,
+    rainy_season_months: rule.rainySeasonMonths,
+    high_temp_months: rule.highTempMonths,
+    cold_weather_months: rule.coldWeatherMonths,
+    typhoon_risk_level: rule.typhoonRiskLevel,
+    flood_season_months: rule.floodSeasonMonths,
+    winter_shutdown_risk_level: rule.winterShutdownRiskLevel,
+    climate_tags: rule.climateTags,
+    source_standard: rule.sourceStandard,
+    source_version: rule.sourceVersion,
+    source_clause_ref: rule.sourceClauseRef,
+    evidence_sources: rule.evidenceSourceKeys,
+    confidence: rule.confidence,
+    status: 'active',
+  }))
+  const rows = await queryClimateRows<{ id: string }>(
+    `WITH seed AS (
+       SELECT *
+       FROM jsonb_to_recordset($1::jsonb) AS seeded(
+         province text,
+         city text,
+         admin_code text,
+         climate_region text,
+         thermal_zone text,
+         rainy_season_months integer[],
+         high_temp_months integer[],
+         cold_weather_months integer[],
+         typhoon_risk_level text,
+         flood_season_months integer[],
+         winter_shutdown_risk_level text,
+         climate_tags text[],
+         source_standard text,
+         source_version text,
+         source_clause_ref text,
+         evidence_sources jsonb,
+         confidence text,
+         status text
+       )
+     ), updated AS (
+       UPDATE public.regional_climate_rules AS target
+       SET climate_region = seed.climate_region,
+           thermal_zone = seed.thermal_zone,
+           rainy_season_months = seed.rainy_season_months,
+           high_temp_months = seed.high_temp_months,
+           cold_weather_months = seed.cold_weather_months,
+           typhoon_risk_level = seed.typhoon_risk_level,
+           flood_season_months = seed.flood_season_months,
+           winter_shutdown_risk_level = seed.winter_shutdown_risk_level,
+           climate_tags = seed.climate_tags,
+           source_standard = seed.source_standard,
+           source_version = seed.source_version,
+           source_clause_ref = seed.source_clause_ref,
+           evidence_sources = seed.evidence_sources,
+           confidence = seed.confidence,
+           status = seed.status,
+           updated_at = NOW()
+       FROM seed
+       WHERE LOWER(target.province) = LOWER(seed.province)
+         AND COALESCE(LOWER(target.city), '') = COALESCE(LOWER(seed.city), '')
+         AND COALESCE(target.admin_code, '') = COALESCE(seed.admin_code, '')
+       RETURNING target.id
+     ), inserted AS (
+       INSERT INTO public.regional_climate_rules (
+         province,
+         city,
+         admin_code,
+         climate_region,
+         thermal_zone,
+         rainy_season_months,
+         high_temp_months,
+         cold_weather_months,
+         typhoon_risk_level,
+         flood_season_months,
+         winter_shutdown_risk_level,
+         climate_tags,
+         source_standard,
+         source_version,
+         source_clause_ref,
+         evidence_sources,
+         confidence,
+         status,
+         updated_at
+       )
+       SELECT
+         seed.province,
+         seed.city,
+         seed.admin_code,
+         seed.climate_region,
+         seed.thermal_zone,
+         seed.rainy_season_months,
+         seed.high_temp_months,
+         seed.cold_weather_months,
+         seed.typhoon_risk_level,
+         seed.flood_season_months,
+         seed.winter_shutdown_risk_level,
+         seed.climate_tags,
+         seed.source_standard,
+         seed.source_version,
+         seed.source_clause_ref,
+         seed.evidence_sources,
+         seed.confidence,
+         seed.status,
+         NOW()
+       FROM seed
+       WHERE NOT EXISTS (
+         SELECT 1
+         FROM public.regional_climate_rules AS existing
+         WHERE LOWER(existing.province) = LOWER(seed.province)
+           AND COALESCE(LOWER(existing.city), '') = COALESCE(LOWER(seed.city), '')
+           AND COALESCE(existing.admin_code, '') = COALESCE(seed.admin_code, '')
+       )
+       RETURNING id
+     )
+     SELECT id FROM updated
+     UNION ALL
+     SELECT id FROM inserted`,
+    [JSON.stringify(seedRows)],
+  )
+  return { insertedOrUpdated: rows.length }
+}
+
 export async function bootstrapRegionalClimateRules() {
   let insertedOrUpdated = 0
   try {
+    if (usesDirectSqlRuntimePath()) {
+      return await bootstrapRegionalClimateRulesDirect()
+    }
+
     for (const rule of V1474_REGIONAL_CLIMATE_RULE_SEED) {
       const payload = {
         province: rule.province,
@@ -944,6 +1104,18 @@ function mostCommonObservation(rows: LocationObservationRow[], scope: 'city' | '
 async function loadRecentObservations(projectId: string) {
   const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString()
   try {
+    if (usesDirectSqlRuntimePath()) {
+      return await queryClimateRows<LocationObservationRow>(
+        `SELECT *
+         FROM public.project_location_observations
+         WHERE project_id = $1::uuid
+           AND observed_at >= $2::timestamptz
+         ORDER BY observed_at DESC
+         LIMIT 200`,
+        [projectId, since],
+      )
+    }
+
     const { data, error } = await (supabase as any)
       .from('project_location_observations')
       .select('*')
@@ -961,6 +1133,14 @@ async function loadRecentObservations(projectId: string) {
 
 async function loadProjectLocationText(projectId: string) {
   try {
+    if (usesDirectSqlRuntimePath()) {
+      const rows = await queryClimateRows<{ location?: string | null }>(
+        'SELECT location FROM public.projects WHERE id = $1::uuid LIMIT 1',
+        [projectId],
+      )
+      return normalizeText(rows[0]?.location)
+    }
+
     const { data, error } = await (supabase as any)
       .from('projects')
       .select('location')
@@ -976,10 +1156,136 @@ async function loadProjectLocationText(projectId: string) {
 
 async function persistProfile(profile: ProjectClimateProfile) {
   try {
-    const { error } = await (supabase as any)
-      .from('project_climate_profiles')
-      .upsert(toDbProfile(profile), { onConflict: 'project_id' })
-    if (error) throw error
+    const projectId = normalizeText(profile.projectId)
+    const row = toDbProfile(profile)
+    if (usesDirectSqlRuntimePath()) {
+      await rawQuery(
+        `INSERT INTO public.project_climate_profiles (
+           project_id,
+           province,
+           city,
+           admin_code,
+           climate_region,
+           thermal_zone,
+           climate_tags,
+           rainy_season_months,
+           high_temp_months,
+           cold_weather_months,
+           typhoon_risk_level,
+           flood_season_months,
+           winter_shutdown_risk_level,
+           soft_soil_level,
+           mountain_terrain,
+           terrain_difficulty_level,
+           seismic_intensity,
+           confidence,
+           location_consensus_status,
+           observation_count,
+           distinct_user_count,
+           source,
+           source_rule_id,
+           weather_provider,
+           last_weather_synced_at,
+           metadata,
+           resolved_at,
+           updated_at
+         )
+         SELECT
+           profile.project_id,
+           profile.province,
+           profile.city,
+           profile.admin_code,
+           profile.climate_region,
+           profile.thermal_zone,
+           profile.climate_tags,
+           profile.rainy_season_months,
+           profile.high_temp_months,
+           profile.cold_weather_months,
+           profile.typhoon_risk_level,
+           profile.flood_season_months,
+           profile.winter_shutdown_risk_level,
+           profile.soft_soil_level,
+           profile.mountain_terrain,
+           profile.terrain_difficulty_level,
+           profile.seismic_intensity,
+           profile.confidence,
+           profile.location_consensus_status,
+           profile.observation_count,
+           profile.distinct_user_count,
+           profile.source,
+           profile.source_rule_id,
+           profile.weather_provider,
+           profile.last_weather_synced_at,
+           profile.metadata,
+           profile.resolved_at,
+           profile.updated_at
+         FROM jsonb_to_record($1::jsonb) AS profile(
+           project_id uuid,
+           province text,
+           city text,
+           admin_code text,
+           climate_region text,
+           thermal_zone text,
+           climate_tags text[],
+           rainy_season_months integer[],
+           high_temp_months integer[],
+           cold_weather_months integer[],
+           typhoon_risk_level text,
+           flood_season_months integer[],
+           winter_shutdown_risk_level text,
+           soft_soil_level integer,
+           mountain_terrain boolean,
+           terrain_difficulty_level integer,
+           seismic_intensity integer,
+           confidence text,
+           location_consensus_status text,
+           observation_count integer,
+           distinct_user_count integer,
+           source text,
+           source_rule_id uuid,
+           weather_provider text,
+           last_weather_synced_at timestamptz,
+           metadata jsonb,
+           resolved_at timestamptz,
+           updated_at timestamptz
+         )
+         WHERE profile.project_id = $2::uuid
+         ON CONFLICT (project_id) DO UPDATE SET
+           province = EXCLUDED.province,
+           city = EXCLUDED.city,
+           admin_code = EXCLUDED.admin_code,
+           climate_region = EXCLUDED.climate_region,
+           thermal_zone = EXCLUDED.thermal_zone,
+           climate_tags = EXCLUDED.climate_tags,
+           rainy_season_months = EXCLUDED.rainy_season_months,
+           high_temp_months = EXCLUDED.high_temp_months,
+           cold_weather_months = EXCLUDED.cold_weather_months,
+           typhoon_risk_level = EXCLUDED.typhoon_risk_level,
+           flood_season_months = EXCLUDED.flood_season_months,
+           winter_shutdown_risk_level = EXCLUDED.winter_shutdown_risk_level,
+           soft_soil_level = EXCLUDED.soft_soil_level,
+           mountain_terrain = EXCLUDED.mountain_terrain,
+           terrain_difficulty_level = EXCLUDED.terrain_difficulty_level,
+           seismic_intensity = EXCLUDED.seismic_intensity,
+           confidence = EXCLUDED.confidence,
+           location_consensus_status = EXCLUDED.location_consensus_status,
+           observation_count = EXCLUDED.observation_count,
+           distinct_user_count = EXCLUDED.distinct_user_count,
+           source = EXCLUDED.source,
+           source_rule_id = EXCLUDED.source_rule_id,
+           weather_provider = EXCLUDED.weather_provider,
+           last_weather_synced_at = EXCLUDED.last_weather_synced_at,
+           metadata = EXCLUDED.metadata,
+           resolved_at = EXCLUDED.resolved_at,
+           updated_at = EXCLUDED.updated_at`,
+        [JSON.stringify(row), projectId],
+      )
+    } else {
+      const { error } = await (supabase as any)
+        .from('project_climate_profiles')
+        .upsert(row, { onConflict: 'project_id' })
+      if (error) throw error
+    }
   } catch (error) {
     logger.warn('[projectClimateProfile] failed to persist project climate profile', {
       projectId: profile.projectId,
@@ -1212,6 +1518,15 @@ export async function resolveProjectClimateProfile(projectId: string | null | un
   if (!normalizedProjectId) return buildDefaultProfile('', 'projectId is empty')
 
   try {
+    if (usesDirectSqlRuntimePath()) {
+      const rows = await queryClimateRows<any>(
+        'SELECT * FROM public.project_climate_profiles WHERE project_id = $1::uuid LIMIT 1',
+        [normalizedProjectId],
+      )
+      if (rows[0]) return fromDbProfile(rows[0])
+      return rebuildProjectClimateProfile(normalizedProjectId)
+    }
+
     const { data, error } = await (supabase as any)
       .from('project_climate_profiles')
       .select('*')
@@ -1552,7 +1867,16 @@ export function parseWeatherForecastPayload(payload: any, profile: ProjectClimat
 }
 
 async function persistWeatherForecasts(input: WeatherForecastInput) {
-  if (input.forecasts.length === 0) return { written: 0 }
+  if (input.forecasts.length === 0) {
+    throw Object.assign(
+      new Error(`Weather provider returned no valid forecast rows for project ${input.projectId}`),
+      {
+        code: 'WEATHER_FORECAST_EMPTY',
+        projectId: input.projectId,
+        provider: input.provider,
+      },
+    )
+  }
   const now = new Date().toISOString()
   const rows = input.forecasts.map((item) => ({
     project_id: input.projectId,
@@ -1573,6 +1897,98 @@ async function persistWeatherForecasts(input: WeatherForecastInput) {
     fetched_at: now,
     updated_at: now,
   }))
+
+  if (usesDirectSqlRuntimePath()) {
+    const result = await queryClimateRows<{ written: number | string }>(
+      `WITH forecast_rows AS (
+         SELECT *
+         FROM jsonb_to_recordset($1::jsonb) AS forecast(
+           project_id uuid,
+           forecast_city text,
+           forecast_admin_code text,
+           forecast_date date,
+           min_temp_c numeric,
+           max_temp_c numeric,
+           precipitation_mm numeric,
+           relative_humidity_percent numeric,
+           snow_depth_cm numeric,
+           wind_level text,
+           warning_tags text[],
+           provider text,
+           provider_record_id text,
+           source_url text,
+           raw_payload jsonb,
+           fetched_at timestamptz,
+           updated_at timestamptz
+         )
+       ), upserted AS (
+         INSERT INTO public.project_weather_forecasts (
+           project_id,
+           forecast_city,
+           forecast_admin_code,
+           forecast_date,
+           min_temp_c,
+           max_temp_c,
+           precipitation_mm,
+           relative_humidity_percent,
+           snow_depth_cm,
+           wind_level,
+           warning_tags,
+           provider,
+           provider_record_id,
+           source_url,
+           raw_payload,
+           fetched_at,
+           updated_at
+         )
+         SELECT
+           project_id,
+           forecast_city,
+           forecast_admin_code,
+           forecast_date,
+           min_temp_c,
+           max_temp_c,
+           precipitation_mm,
+           relative_humidity_percent,
+           snow_depth_cm,
+           wind_level,
+           warning_tags,
+           provider,
+           provider_record_id,
+           source_url,
+           raw_payload,
+           fetched_at,
+           updated_at
+         FROM forecast_rows
+         ON CONFLICT (project_id, forecast_date, provider) DO UPDATE SET
+           forecast_city = EXCLUDED.forecast_city,
+           forecast_admin_code = EXCLUDED.forecast_admin_code,
+           min_temp_c = EXCLUDED.min_temp_c,
+           max_temp_c = EXCLUDED.max_temp_c,
+           precipitation_mm = EXCLUDED.precipitation_mm,
+           relative_humidity_percent = EXCLUDED.relative_humidity_percent,
+           snow_depth_cm = EXCLUDED.snow_depth_cm,
+           wind_level = EXCLUDED.wind_level,
+           warning_tags = EXCLUDED.warning_tags,
+           provider_record_id = EXCLUDED.provider_record_id,
+           source_url = EXCLUDED.source_url,
+           raw_payload = EXCLUDED.raw_payload,
+           fetched_at = EXCLUDED.fetched_at,
+           updated_at = EXCLUDED.updated_at
+         RETURNING project_id
+       ), profile_updated AS (
+         UPDATE public.project_climate_profiles
+         SET weather_provider = $2::text,
+             last_weather_synced_at = $3::timestamptz,
+             updated_at = $3::timestamptz
+         WHERE project_id = $4::uuid
+         RETURNING project_id
+       )
+       SELECT COUNT(*)::integer AS written FROM upserted`,
+      [JSON.stringify(rows), input.provider, now, input.projectId],
+    )
+    return { written: Number(result[0]?.written ?? 0) }
+  }
 
   const { error } = await (supabase as any)
     .from('project_weather_forecasts')
