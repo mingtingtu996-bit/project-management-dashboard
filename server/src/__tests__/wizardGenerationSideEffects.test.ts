@@ -3,6 +3,7 @@ import request from 'supertest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { resolveDurationLearningRuntimePublication } from '../services/durationLearningRuntimePublicationService.js'
 
 const mocks = vi.hoisted(() => ({
   rawQuery: vi.fn(),
@@ -2906,6 +2907,19 @@ describe('v1.4.22.1 project wizard route side effects', () => {
   })
 
   it('commits wizard generation, creates tasks, writes passed milestones, clears draft metadata, and activates the project', async () => {
+    const defaultGenerateWbsTemplateRows = mocks.generateWbsTemplateRows.getMockImplementation()
+    expect(defaultGenerateWbsTemplateRows).toEqual(expect.any(Function))
+    mocks.generateWbsTemplateRows.mockImplementationOnce(async (input: any) => {
+      await resolveDurationLearningRuntimePublication({
+        queryExec: input.runtimePublicationQueryExec,
+        assetKey: 'special_work_duration_seed',
+        artifactKey: 'china-gb55032-template',
+        companyId: 'company-1',
+        projectId: input.projectId,
+        industryKey: 'hospital',
+      })
+      return defaultGenerateWbsTemplateRows!(input)
+    })
     mocks.resolveConstructionCalendarContext.mockResolvedValueOnce({
       basis: 'official_construction_calendar_seed',
       windows: [{
@@ -3456,11 +3470,19 @@ describe('v1.4.22.1 project wizard route side effects', () => {
     expect(generationCall.runtimePublicationQueryExec).toEqual(expect.any(Function))
     expect(generationCall.runtimeConsumerObservationQueryExec).toBeUndefined()
     expect(generationCall.runtimeArtifactPublications).toEqual([])
+    expect(mocks.rawQuery.mock.calls.some(([sql, params]) => (
+      String(sql).includes('from public.duration_learning_runtime_publications')
+      && String(sql).includes("publication_stage = 'canary'")
+      && params?.[0] === 'special_work_duration_seed'
+      && params?.[1] === 'china-gb55032-template'
+    ))).toBe(true)
     expect(mocks.recordWbsTemplateGenerationRuntimeConsumption).toHaveBeenCalledWith(expect.objectContaining({
       projectId: committedProjectId,
       generation: expect.any(Object),
       runtimeArtifactPublications: generationCall.runtimeArtifactPublications,
     }))
+    const runtimeObservationCall = mocks.recordWbsTemplateGenerationRuntimeConsumption.mock.calls.at(-1)?.[0] as any
+    expect(runtimeObservationCall.queryExec).not.toBe(generationCall.runtimePublicationQueryExec)
     expect(mocks.persistDurationLearningRuntimeConsumptions).toHaveBeenCalledWith(expect.objectContaining({
       build: expect.objectContaining({
         companyId: 'company-1',
