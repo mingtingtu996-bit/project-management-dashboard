@@ -3350,7 +3350,7 @@
     {
       "kind": "migration",
       "id": "335_duration_learning_retirement_state_rls_policy",
-      "architectureUnit": "搴曞骇锛氬钩鍙拌繍琛岃娴?",
+      "architectureUnit": "底座：平台运行观测",
       "runtimeScope": "platform_foundation",
       "assignmentReason": "adds an explicit deny-all RLS policy to the internal duration-learning retirement state table"
     },
@@ -4599,7 +4599,7 @@
     {
       "kind": "service",
       "id": "securityAdvisorRetirementStateRlsService",
-      "architectureUnit": "搴曞骇锛氬钩鍙拌繍琛岃娴?",
+      "architectureUnit": "底座：平台运行观测",
       "runtimeScope": "platform_foundation",
       "assignmentReason": "verifies migration 335 ledger state and deny-all RLS readback for the internal duration-learning retirement table"
     },
