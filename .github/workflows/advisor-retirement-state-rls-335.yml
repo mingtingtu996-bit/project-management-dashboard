@@ -1,0 +1,101 @@
+name: Advisor Retirement-State RLS 335
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact current main SHA containing migration 335 and this workflow
+        required: true
+        type: string
+      confirmation:
+        description: Type APPLY_STAGING_ADVISOR_RETIREMENT_STATE_RLS_335
+        required: true
+        type: string
+      advisor_security_confirmation:
+        description: Type EXACT_1_SECURITY_INFO_MATCH_MIGRATION_335 after reviewing the current Security Advisor row
+        required: true
+        type: string
+      migration_maintenance_window_confirmed:
+        description: Confirm staging is in a controlled low-traffic migration window
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lighthouse-host-runtime-mutation
+  cancel-in-progress: false
+
+jobs:
+  apply-staging-retirement-state-rls:
+    name: Apply Exact Staging Retirement-State RLS 335
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: staging
+    steps:
+      - name: Checkout exact release
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 0
+
+      - name: Verify protected release authorization
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          ADVISOR_SECURITY_CONFIRMATION: ${{ inputs.advisor_security_confirmation }}
+          MIGRATION_MAINTENANCE_WINDOW_CONFIRMED: ${{ inputs.migration_maintenance_window_confirmed }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [ "$CONFIRMATION" = "APPLY_STAGING_ADVISOR_RETIREMENT_STATE_RLS_335" ]
+          [ "$ADVISOR_SECURITY_CONFIRMATION" = "EXACT_1_SECURITY_INFO_MATCH_MIGRATION_335" ]
+          [ "$MIGRATION_MAINTENANCE_WINDOW_CONFIRMED" = "true" ]
+          [ "$(git rev-parse HEAD)" = "$RELEASE_SHA" ]
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          [ "$(git rev-parse origin/main)" = "$RELEASE_SHA" ]
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install server dependencies
+        working-directory: server
+        run: npm ci --workspaces=false --no-fund
+
+      - name: Verify exact staging database target identity
+        working-directory: server
+        env:
+          SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+          SUPABASE_MIGRATION_URL: ${{ secrets.STAGING_SUPABASE_MIGRATION_URL }}
+        run: npm run verify:security-advisor-retirement-state-rls-target
+
+      - name: Verify migration 335 is the exact selectable pending migration
+        working-directory: server
+        env:
+          DATABASE_URL: ${{ secrets.STAGING_SUPABASE_MIGRATION_URL }}
+        run: npm run migrate:plan -- --only=335_duration_learning_retirement_state_rls_policy.sql
+
+      - name: Apply migration 335 only
+        working-directory: server
+        env:
+          DATABASE_URL: ${{ secrets.STAGING_SUPABASE_MIGRATION_URL }}
+        run: npm run migrate:pending -- --only=335_duration_learning_retirement_state_rls_policy.sql
+
+      - name: Verify migration 335 readback
+        working-directory: server
+        env:
+          DATABASE_URL: ${{ secrets.STAGING_SUPABASE_MIGRATION_URL }}
+        run: npm run verify:security-advisor-retirement-state-rls -- --expect hardened
+
+      - name: Report migration 335 readback
+        run: |
+          {
+            echo "Migration 335 staging readback passed. Rerun the staging Supabase Security Advisor and refresh the protected Advisor export before the normal same-SHA deployment workflow."
+            echo "No application, host, ingress, or container mutation was performed by this workflow."
+          } >> "$GITHUB_STEP_SUMMARY"

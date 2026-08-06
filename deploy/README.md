@@ -118,6 +118,25 @@ Dashboard UI or Management API export with zero security issues, update the
 protected environment Advisor secret, and only then run the normal same-SHA
 deployment workflow. Staging must complete before the production token is used.
 
+## Advisor Retirement-State RLS 335
+
+Migration 335 is a staging-only database remediation for the internal
+`duration_learning_legacy_runtime_retirement_state` table, which is intentionally
+not a client data surface. Dispatch
+`.github/workflows/advisor-retirement-state-rls-335.yml` only from the exact
+current protected `main` SHA, confirm a controlled low-traffic migration window,
+enter `EXACT_1_SECURITY_INFO_MATCH_MIGRATION_335`, and use:
+
+- `APPLY_STAGING_ADVISOR_RETIREMENT_STATE_RLS_335`
+
+The workflow verifies the exact staging Supabase target, selects and applies only
+`335_duration_learning_retirement_state_rls_policy.sql`, and reads back the
+ledger, enabled and forced RLS, and the explicit `USING (false)` / `WITH CHECK
+(false)` policy. It grants no `anon` or `authenticated` access and performs no
+application, host, ingress, or container mutation. After readback, rerun the
+staging Security Advisor and refresh the protected Advisor export before the
+normal same-SHA deployment workflow.
+
 ## Production runtime recovery
 
 `.github/workflows/production-runtime-recovery.yml` is a manual, protected
