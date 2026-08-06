@@ -3,6 +3,7 @@ import request from 'supertest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { resolveDurationLearningRuntimePublication } from '../services/durationLearningRuntimePublicationService.js'
 
 const mocks = vi.hoisted(() => ({
   rawQuery: vi.fn(),
@@ -2906,6 +2907,19 @@ describe('v1.4.22.1 project wizard route side effects', () => {
   })
 
   it('commits wizard generation, creates tasks, writes passed milestones, clears draft metadata, and activates the project', async () => {
+    const defaultGenerateWbsTemplateRows = mocks.generateWbsTemplateRows.getMockImplementation()
+    expect(defaultGenerateWbsTemplateRows).toEqual(expect.any(Function))
+    mocks.generateWbsTemplateRows.mockImplementationOnce(async (input: any) => {
+      await resolveDurationLearningRuntimePublication({
+        queryExec: input.runtimePublicationQueryExec,
+        assetKey: 'special_work_duration_seed',
+        artifactKey: 'china-gb55032-template',
+        companyId: 'company-1',
+        projectId: input.projectId,
+        industryKey: 'hospital',
+      })
+      return defaultGenerateWbsTemplateRows!(input)
+    })
     mocks.resolveConstructionCalendarContext.mockResolvedValueOnce({
       basis: 'official_construction_calendar_seed',
       windows: [{
@@ -3456,25 +3470,12 @@ describe('v1.4.22.1 project wizard route side effects', () => {
     expect(generationCall.runtimePublicationQueryExec).toEqual(expect.any(Function))
     expect(generationCall.runtimeConsumerObservationQueryExec).toBeUndefined()
     expect(generationCall.runtimeArtifactPublications).toEqual([])
-    await expect(generationCall.runtimePublicationQueryExec(
-      `select publication_key,
-              asset_key,
-              artifact_key,
-              scope_level,
-              company_id,
-              project_id,
-              industry_key,
-              publication_stage,
-              runtime_payload,
-              previous_publication_key,
-              traffic_percent,
-              monitoring_status,
-              published_at
-         from public.duration_learning_runtime_publications
-        where asset_key = $1
-          and artifact_key = $2`,
-      ['special_work_duration_seed', 'china-gb55032-template'],
-    )).resolves.toEqual(expect.any(Array))
+    expect(mocks.rawQuery.mock.calls.some(([sql, params]) => (
+      String(sql).includes('from public.duration_learning_runtime_publications')
+      && String(sql).includes("publication_stage = 'canary'")
+      && params?.[0] === 'special_work_duration_seed'
+      && params?.[1] === 'china-gb55032-template'
+    ))).toBe(true)
     expect(mocks.recordWbsTemplateGenerationRuntimeConsumption).toHaveBeenCalledWith(expect.objectContaining({
       projectId: committedProjectId,
       generation: expect.any(Object),
