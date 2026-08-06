@@ -72,6 +72,30 @@ const state = vi.hoisted(() => {
     await dependencies.queryExec?.('SELECT execution_fact_writer_marker', [])
     return []
   })
+  const buildChangedExecutionFactInputs = vi.fn((input: Record<string, any>) => (
+    (input.changes ?? []).map((change: Record<string, unknown>) => ({
+      projectId: input.projectId,
+      entityType: input.entityType,
+      entityId: input.entityId,
+      factType: change.factType,
+      value: change.nextValue,
+      effectiveAt: change.effectiveAt ?? input.observedAt,
+      observedAt: input.observedAt,
+      sourceModule: input.sourceModule,
+      sourceEventId: `${input.sourceMutationId}:${change.factType}`,
+      actorUserId: input.actorUserId ?? null,
+      evidenceRefs: change.evidenceRefs ?? [],
+      confidence: change.confidence ?? 1,
+      idempotencyKey: `${input.sourceMutationId}:${change.factType}`,
+    }))
+  ))
+  const recordInitialExecutionFactsBatch = vi.fn(async (
+    _inputs: Array<Record<string, unknown>>,
+    dependencies: { queryExec?: (sql: string, params?: unknown[]) => Promise<unknown[]> },
+  ) => {
+    await dependencies.queryExec?.('SELECT execution_fact_batch_writer_marker', [])
+    return []
+  })
   return {
     client,
     queries,
@@ -80,7 +104,9 @@ const state = vi.hoisted(() => {
     recordLineageInTransaction: vi.fn(),
     createLineageBatchInTransaction: vi.fn(async () => ({ batchId: 'lineage-batch-1', linkCount: 0 })),
     shouldRegenerateTaskCode: vi.fn(() => false),
+    buildChangedExecutionFactInputs,
     recordChangedExecutionFacts,
+    recordInitialExecutionFactsBatch,
     currentTaskRow,
   }
 })
@@ -135,7 +161,9 @@ vi.mock('../services/wbsTaskStructureGovernancePipelineService.js', () => ({
 }))
 
 vi.mock('../services/executionFactGovernanceService.js', () => ({
+  buildChangedExecutionFactInputs: state.buildChangedExecutionFactInputs,
   recordChangedExecutionFacts: state.recordChangedExecutionFacts,
+  recordInitialExecutionFactsBatch: state.recordInitialExecutionFactsBatch,
 }))
 
 describe('task code transaction optimistic locking', () => {
@@ -149,11 +177,19 @@ describe('task code transaction optimistic locking', () => {
     state.createLineageBatchInTransaction.mockClear()
     state.createLineageBatchInTransaction.mockResolvedValue({ batchId: 'lineage-batch-1', linkCount: 0 })
     state.shouldRegenerateTaskCode.mockReturnValue(false)
+    state.buildChangedExecutionFactInputs.mockClear()
     state.recordChangedExecutionFacts.mockImplementation(async (
       _input: Record<string, unknown>,
       dependencies: { queryExec?: (sql: string, params?: unknown[]) => Promise<unknown[]> },
     ) => {
       await dependencies.queryExec?.('SELECT execution_fact_writer_marker', [])
+      return []
+    })
+    state.recordInitialExecutionFactsBatch.mockImplementation(async (
+      _inputs: Array<Record<string, unknown>>,
+      dependencies: { queryExec?: (sql: string, params?: unknown[]) => Promise<unknown[]> },
+    ) => {
+      await dependencies.queryExec?.('SELECT execution_fact_batch_writer_marker', [])
       return []
     })
     Object.assign(state.currentTaskRow, {
@@ -465,7 +501,7 @@ describe('task code transaction optimistic locking', () => {
     )
   })
 
-  it('records five forced initial execution facts per wizard task before the single commit', async () => {
+  it('records all forced initial wizard facts through one batch before the single commit', async () => {
     const { createTasksWithCodeInWizardBatchTransaction } = await import('../services/taskCodeTransactionService.js')
 
     await createTasksWithCodeInWizardBatchTransaction([
@@ -479,23 +515,22 @@ describe('task code transaction optimistic locking', () => {
       } as any,
     ], 'user-1')
 
-    expect(state.recordChangedExecutionFacts).toHaveBeenCalledTimes(2)
-    for (const [taskId, call] of ['batch-task-1', 'batch-task-2'].map((id, index) => [id, state.recordChangedExecutionFacts.mock.calls[index]] as const)) {
-      expect(call?.[0]).toEqual(expect.objectContaining({
-        entityId: taskId,
-        sourceMutationId: `task:${taskId}:version:1`,
-        changes: expect.arrayContaining([
-          expect.objectContaining({ factType: 'task.actual_start_date', force: true }),
-          expect.objectContaining({ factType: 'task.actual_end_date', force: true }),
-          expect.objectContaining({ factType: 'task.first_progress_at', force: true }),
-          expect.objectContaining({ factType: 'task.progress', force: true }),
-          expect.objectContaining({ factType: 'task.status', force: true }),
-        ]),
-      }))
+    expect(state.recordChangedExecutionFacts).not.toHaveBeenCalled()
+    expect(state.recordInitialExecutionFactsBatch).toHaveBeenCalledTimes(1)
+    const facts = state.recordInitialExecutionFactsBatch.mock.calls[0]?.[0] ?? []
+    expect(facts).toHaveLength(10)
+    for (const taskId of ['batch-task-1', 'batch-task-2']) {
+      expect(facts.filter((fact: Record<string, unknown>) => fact.entityId === taskId)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ factType: 'task.actual_start_date' }),
+        expect.objectContaining({ factType: 'task.actual_end_date' }),
+        expect.objectContaining({ factType: 'task.first_progress_at' }),
+        expect.objectContaining({ factType: 'task.progress' }),
+        expect.objectContaining({ factType: 'task.status' }),
+      ]))
     }
     expect(state.queries.filter((entry) => entry.sql === 'COMMIT')).toHaveLength(1)
     const sql = state.queries.map((entry) => entry.sql)
-    expect(sql.lastIndexOf('SELECT execution_fact_writer_marker')).toBeLessThan(sql.indexOf('COMMIT'))
+    expect(sql.indexOf('SELECT execution_fact_batch_writer_marker')).toBeLessThan(sql.indexOf('COMMIT'))
   })
 
   it('records reopen execution facts atomically before commit', async () => {

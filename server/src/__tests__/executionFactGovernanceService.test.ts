@@ -350,6 +350,108 @@ describe('execution fact governance service', () => {
     expect(harness.insertedRows).toHaveLength(1)
   })
 
+  it('records append-only facts without requiring runtime UPDATE privilege', async () => {
+    const harness = createHarness()
+    const runtimeAclQueryExec = vi.fn(async (sql: string, params: unknown[] = []) => {
+      const normalized = sql.toLowerCase().replace(/\s+/g, ' ')
+      if (
+        normalized.includes('from public.execution_fact_events')
+        && /\bfor (?:update|no key update|share|key share)\b/.test(normalized)
+      ) {
+        throw Object.assign(new Error('permission denied for table execution_fact_events'), {
+          code: '42501',
+        })
+      }
+      return harness.queryExec(sql, params)
+    }) as ExecutionFactQueryExecutor & ReturnType<typeof vi.fn>
+
+    await expect(recordExecutionFact(baseInput(), {
+      ...harness.dependencies,
+      queryExec: runtimeAclQueryExec,
+    })).resolves.toMatchObject({
+      disposition: 'created',
+    })
+
+    const authorityReads = runtimeAclQueryExec.mock.calls
+      .map(([sql]) => String(sql).toLowerCase().replace(/\s+/g, ' '))
+      .filter((sql) => sql.includes('from public.execution_fact_events'))
+    expect(authorityReads).not.toHaveLength(0)
+    for (const sql of authorityReads) {
+      expect(sql).not.toMatch(/\bfor (?:update|no key update|share|key share)\b/)
+    }
+  })
+
+  it('persists initial facts through one batch insert without per-fact authority reads', async () => {
+    const recordInitialExecutionFactsBatch = (executionFactGovernance as any).recordInitialExecutionFactsBatch
+    expect(recordInitialExecutionFactsBatch).toBeTypeOf('function')
+
+    const statusSourceEventId = `task:${taskId}:version:7:status`
+    const inputs = [
+      baseInput(),
+      baseInput({
+        factType: 'task.status',
+        value: 'in_progress',
+        sourceEventId: statusSourceEventId,
+        idempotencyKey: buildExecutionFactIdempotencyKey({
+          companyId,
+          projectId,
+          entityType: 'task',
+          entityId: taskId,
+          factType: 'task.status',
+          sourceModule: 'taskWriteChainService',
+          sourceEventId: statusSourceEventId,
+        }),
+      }),
+    ]
+    const queryExec = vi.fn(async (sql: string, params: unknown[] = []): Promise<Row[]> => {
+      const normalized = sql.toLowerCase().replace(/\s+/g, ' ')
+      if (normalized.includes('from public.projects project')) {
+        return [{ company_id: companyId }]
+      }
+      if (normalized.includes('from public.tasks entity') && normalized.includes('any($1::uuid[])')) {
+        return [{ id: taskId, project_id: projectId }]
+      }
+      if (normalized.includes('insert into public.execution_fact_events')) {
+        const rows: Row[] = []
+        for (let offset = 0; offset < params.length; offset += 14) {
+          rows.push({
+            id: `55555555-5555-4555-8555-${String(rows.length + 1).padStart(12, '0')}`,
+            company_id: params[offset],
+            project_id: params[offset + 1],
+            entity_type: params[offset + 2],
+            entity_id: params[offset + 3],
+            fact_type: params[offset + 4],
+            fact_value: JSON.parse(String(params[offset + 5])),
+            effective_at: params[offset + 6],
+            observed_at: params[offset + 7],
+            source_module: params[offset + 8],
+            source_event_id: params[offset + 9],
+            actor_user_id: params[offset + 10],
+            evidence_refs: JSON.parse(String(params[offset + 11])),
+            confidence: params[offset + 12],
+            supersedes_event_id: null,
+            supersession_kind: 'initial',
+            correction_reason: null,
+            idempotency_key: params[offset + 13],
+            created_at: params[offset + 7],
+          })
+        }
+        return rows
+      }
+      throw new Error(`unexpected SQL: ${sql}`)
+    })
+
+    const results = await recordInitialExecutionFactsBatch(inputs, {
+      queryExec,
+      isTransactionActive: () => true,
+    })
+
+    expect(results).toHaveLength(2)
+    expect(results.every((result: { disposition?: string }) => result.disposition === 'created')).toBe(true)
+    expect(queryExec.mock.calls.filter(([sql]) => /insert into public\.execution_fact_events/i.test(String(sql)))).toHaveLength(1)
+    expect(queryExec.mock.calls.some(([sql]) => /from public\.execution_fact_events/i.test(String(sql)))).toBe(false)
+  })
+
   it('reuses an identical idempotency key and rejects a conflicting replay', async () => {
     const input = baseInput()
     const existing = eventRow(input)
