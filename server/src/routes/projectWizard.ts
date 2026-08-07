@@ -8,6 +8,7 @@ import { logger } from '../middleware/logger.js'
 import { ensureDefaultCompanyForUser, getCurrentCompanyMembership, getProjectPermissionLevel } from '../auth/access.js'
 import { getRequestCompanyId } from '../auth/companyContext.js'
 import { getClient, query as rawQuery } from '../database.js'
+import { invalidateTaskReadCache } from '../services/dbService.js'
 import { createTasksInWizardBatch } from '../services/taskWriteChainService.js'
 import { executeProjectCreationUnderCommercialGuard } from '../services/commercialTransactionService.js'
 import { createDurationRuntimeConsumerObservationQueryExec } from '../services/durationRuntimeConsumerObservationService.js'
@@ -8216,6 +8217,7 @@ async function commitWizardGeneration(params: {
   })
   await transactionClient.query('COMMIT')
   transactionCommitted = true
+  invalidateTaskReadCache(params.projectId)
   let criticalPathRefresh: ReturnType<typeof buildWizardCriticalPathRefreshSummary> | null = null
   let postCommitDerivations: WizardPostCommitDerivationState = pendingPostCommitDerivations
   try {

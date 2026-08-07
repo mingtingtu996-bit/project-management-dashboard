@@ -47,6 +47,7 @@ const mocks = vi.hoisted(() => ({
   executeProjectCreationUnderCommercialGuard: vi.fn(),
   commercialTransactionQuery: vi.fn(),
   recordAcceptancePlanExecutionFacts: vi.fn(async () => []),
+  invalidateTaskReadCache: vi.fn(),
 }))
 
 vi.mock('../middleware/auth.js', () => ({
@@ -113,6 +114,10 @@ vi.mock('../services/wizardScopeMaterializationService.js', async (importOrigina
 vi.mock('../services/taskWriteChainService.js', () => ({
   createTaskInMainChain: mocks.createTaskInMainChain,
   createTasksInWizardBatch: mocks.createTasksInWizardBatch,
+}))
+
+vi.mock('../services/dbService.js', () => ({
+  invalidateTaskReadCache: mocks.invalidateTaskReadCache,
 }))
 
 vi.mock('../services/taskStandardModelService.js', () => ({
@@ -3657,6 +3662,11 @@ describe('v1.4.22.1 project wizard route side effects', () => {
     expect(baselineInsertIndex).toBeGreaterThanOrEqual(0)
     expect(baselineItemsInsertIndex).toBeGreaterThan(baselineInsertIndex)
     expect(commitIndex).toBeGreaterThan(baselineItemsInsertIndex)
+    expect(mocks.invalidateTaskReadCache).toHaveBeenCalledTimes(1)
+    expect(mocks.invalidateTaskReadCache).toHaveBeenCalledWith(committedProjectId)
+    expect(mocks.invalidateTaskReadCache.mock.invocationCallOrder[0]).toBeGreaterThan(
+      mocks.txClientQuery.mock.invocationCallOrder[commitIndex],
+    )
     expect(baselineItemsInsertCall?.[1]).toEqual(expect.arrayContaining(['task-1', 'task-2']))
     expect(mocks.txClientRelease).toHaveBeenCalledTimes(1)
     const finalProjectUpdateCall = findCompletedProjectMetadataUpdateCall()
