@@ -1647,6 +1647,7 @@ export interface TaskSnapshotWriteOptions {
   eventType?: string
   eventSource?: string
   notes?: string | null
+  deferProjectSideEffects?: boolean
   confirmationStatus?: 'unconfirmed' | 'confirmed' | 'acknowledged' | 'verified' | null
   confirmedAt?: string | null
   confirmedBy?: string | null
@@ -1846,6 +1847,50 @@ function toMonthKey(value?: string | null) {
   return /^\d{4}-\d{2}-\d{2}$/.test(normalized) ? normalized.slice(0, 7) : null
 }
 
+export async function flushTaskProgressSnapshotProjectSideEffects(projectId: string, eventType: string) {
+  const normalizedProjectId = String(projectId ?? '').trim()
+  if (!normalizedProjectId) return
+
+  const effects: Array<{
+    name: 'enqueueProjectHealthUpdate' | 'syncProjectDataQuality'
+    run: (() => Promise<unknown> | unknown) | undefined
+  }> = [
+    {
+      name: 'enqueueProjectHealthUpdate',
+      run: businessSideEffectAdapters.enqueueProjectHealthUpdate
+        ? () => businessSideEffectAdapters.enqueueProjectHealthUpdate!(normalizedProjectId, eventType)
+        : undefined,
+    },
+    {
+      name: 'syncProjectDataQuality',
+      run: businessSideEffectAdapters.syncProjectDataQuality
+        ? () => businessSideEffectAdapters.syncProjectDataQuality!(normalizedProjectId)
+        : undefined,
+    },
+  ]
+
+  for (const effect of effects) {
+    if (!effect.run) {
+      logger.warn('[dbService] business side-effect adapter is not registered', {
+        name: effect.name,
+        projectId: normalizedProjectId,
+        eventType,
+      })
+      continue
+    }
+    try {
+      await effect.run()
+    } catch (error) {
+      logger.warn('[dbService] business side-effect failed', {
+        name: effect.name,
+        projectId: normalizedProjectId,
+        eventType,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+}
+
 export async function recordTaskProgressSnapshot(task: any, options: TaskSnapshotWriteOptions = {}, previousTask?: any | null) {
   const eventType = options.eventType ?? resolveTaskSnapshotEventType(task, previousTask)
   const eventSource = normalizeProgressSnapshotSource(options.eventSource ?? (options.recordedBy ? 'user_action' : 'system_auto'))
@@ -1958,7 +2003,7 @@ export async function recordTaskProgressSnapshot(task: any, options: TaskSnapsho
   }
 
   const projectId = String(task?.project_id ?? '').trim()
-  if (projectId) {
+  if (projectId && !options.deferProjectSideEffects) {
     runBusinessSideEffect(
       'enqueueProjectHealthUpdate',
       businessSideEffectAdapters.enqueueProjectHealthUpdate

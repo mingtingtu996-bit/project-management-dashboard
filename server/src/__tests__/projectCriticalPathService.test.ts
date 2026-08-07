@@ -583,6 +583,41 @@ describe('project critical path service', () => {
     ))).toBe(true)
   })
 
+  it('loads industry learning scope from the physical project_type column', async () => {
+    useAuthoritativeConstructionCalendar()
+    mocks.tables.tasks = mocks.tables.tasks.map((task) => task.id === 'task-a'
+      ? { ...task, standard_work_code: 'SW-INDUSTRY-WATCH' }
+      : task)
+    mocks.tables.duration_learning_runtime_publications = [{
+      publication_key: 'duration_learning_runtime:critical_path_rule_candidate:industry-watch-v1',
+      asset_key: 'critical_path_rule_candidate',
+      artifact_key: 'critical-industry-watch-v1',
+      scope_level: 'industry',
+      company_id: null,
+      project_id: null,
+      industry_key: 'residential',
+      publication_stage: 'stable',
+      runtime_payload: {
+        criticalStableCodes: ['SW-INDUSTRY-WATCH'],
+        watchReason: 'industry_near_critical_prior',
+      },
+      previous_publication_key: null,
+      traffic_percent: 100,
+      monitoring_status: 'passed',
+      published_at: '2026-07-17T00:00:00.000Z',
+    }]
+
+    const result = await recalculateProjectCriticalPath('project-1')
+
+    const projectScopeQuery = mocks.executeSQL.mock.calls.find(([sql]) => (
+      String(sql).toLowerCase().includes('from public.projects')
+    ))
+    expect(projectScopeQuery).toBeDefined()
+    expect(String(projectScopeQuery?.[0]).toLowerCase()).toContain('select company_id, project_type')
+    expect(String(projectScopeQuery?.[0]).toLowerCase()).not.toContain('business_type')
+    expect(result.snapshot.watchedTaskIds).toContain('task-a')
+  })
+
   it('propagates effective duration publication receipts into CPM while keeping candidates evidence-only', async () => {
     mocks.readLiveProjectGenerationFacts.mockResolvedValue({
       wizard_generation_duration_asset_consumption_receipts: [

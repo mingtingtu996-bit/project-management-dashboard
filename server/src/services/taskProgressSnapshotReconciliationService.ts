@@ -2,6 +2,7 @@ import type { Task } from '../types/db.js'
 import {
   getProjects,
   getTasks,
+  flushTaskProgressSnapshotProjectSideEffects,
   listTaskProgressSnapshotsByTaskIds,
   recordTaskProgressSnapshot,
 } from './dbService.js'
@@ -130,6 +131,7 @@ export async function reconcileProjectTaskProgressSnapshots(projectId: string) {
         eventType: 'task_reconciled',
         eventSource: 'system_auto',
         notes: `Task progress snapshot reconciliation: ${drift.reason}`,
+        deferProjectSideEffects: true,
       })
       repaired += 1
     } catch (error) {
@@ -138,6 +140,10 @@ export async function reconcileProjectTaskProgressSnapshots(projectId: string) {
         error: error instanceof Error ? error.message : String(error),
       })
     }
+  }
+
+  if (repaired > 0) {
+    await flushTaskProgressSnapshotProjectSideEffects(state.projectId, 'task_reconciled')
   }
 
   return {

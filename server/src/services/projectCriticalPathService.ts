@@ -2339,7 +2339,7 @@ async function loadCriticalPathLearningScope(
   if (!companyId || !industryKey) {
     try {
       const projects = await queryExec<Record<string, unknown>>(
-        `select company_id, business_type, project_type
+        `select company_id, project_type
            from public.projects
           where id = $1::uuid
           limit 1`,
@@ -2350,9 +2350,7 @@ async function loadCriticalPathLearningScope(
       }
       if (!industryKey) {
         industryKey = normalizeText(
-          projects[0]?.business_type
-            ?? projects[0]?.businessType
-            ?? projects[0]?.project_type
+          projects[0]?.project_type
             ?? projects[0]?.projectType,
         ) || null
       }
