@@ -721,7 +721,81 @@ function resolveSqlNumericToken(token: string | undefined, params: any[], index:
   return { value, consumed: 0 }
 }
 
-function convertQuestionPlaceholdersToPg(sql: string) {
+function containsNativePostgresPlaceholder(sql: string) {
+  let quote: "'" | '"' | null = null
+  let lineComment = false
+  let blockComment = false
+  let dollarQuote: string | null = null
+
+  for (let cursor = 0; cursor < sql.length; cursor += 1) {
+    const char = sql[cursor]
+    const next = sql[cursor + 1]
+
+    if (dollarQuote) {
+      if (sql.startsWith(dollarQuote, cursor)) {
+        cursor += dollarQuote.length - 1
+        dollarQuote = null
+      }
+      continue
+    }
+
+    if (lineComment) {
+      if (char === "\n" || char === "\r") lineComment = false
+      continue
+    }
+
+    if (blockComment) {
+      if (char === '*' && next === '/') {
+        blockComment = false
+        cursor += 1
+      }
+      continue
+    }
+
+    if (quote) {
+      if (char === quote) {
+        if (quote === "'" && next === "'") {
+          cursor += 1
+        } else {
+          quote = null
+        }
+      }
+      continue
+    }
+
+    if (char === "'" || char === '"') {
+      quote = char
+      continue
+    }
+
+    if (char === '-' && next === '-') {
+      lineComment = true
+      cursor += 1
+      continue
+    }
+
+    if (char === '/' && next === '*') {
+      blockComment = true
+      cursor += 1
+      continue
+    }
+
+    const positionalPlaceholder = sql.slice(cursor).match(/^\$\d+(?![A-Za-z0-9_])/)
+    if (positionalPlaceholder) return true
+
+    const dollarQuoteStart = sql.slice(cursor).match(/^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/)
+    if (dollarQuoteStart) {
+      dollarQuote = dollarQuoteStart[0]
+      cursor += dollarQuote.length - 1
+    }
+  }
+
+  return false
+}
+
+function convertQuestionPlaceholdersToPg(sql: string, params: any[]) {
+  if (params.length === 0 || containsNativePostgresPlaceholder(sql)) return sql
+
   let index = 0
   let quote: "'" | '"' | null = null
   let converted = ''
@@ -766,7 +840,7 @@ async function runDirectExecuteSqlFallback<T = any>(
   params: any[],
   label: string,
 ): Promise<T[]> {
-  const pgSql = convertQuestionPlaceholdersToPg(sql)
+  const pgSql = convertQuestionPlaceholdersToPg(sql, params)
   const result = await withDirectQueryTimeout(rawQuery(pgSql, params), label)
   return result.rows as T[]
 }
