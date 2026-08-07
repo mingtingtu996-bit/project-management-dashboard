@@ -51,8 +51,11 @@ describe('durationLearningRuntimeEvidenceOutboxService', () => {
     expect(calls[0].sql).toContain("jsonb_array_elements(requested.payload->'runtimeApplications')")
     expect(calls[0].sql).toContain('duration_learning_runtime_evidence_outbox_row_is_authorized')
     expect(calls[0].sql).not.toContain("or requested.event_type = 'wbs_candidate'")
-    expect(calls[0].params).toEqual(expect.arrayContaining([
-      expect.arrayContaining([expect.objectContaining({
+    expect(calls[0].params).toHaveLength(1)
+    expect(calls[0].params[0]).toEqual(expect.any(String))
+    const requestedRows = JSON.parse(String(calls[0].params[0]))
+    expect(requestedRows).toEqual([
+      expect.objectContaining({
         company_id: events[0].companyId,
         project_id: events[0].projectId,
         subject_type: 'task',
@@ -61,8 +64,8 @@ describe('durationLearningRuntimeEvidenceOutboxService', () => {
         artifact_key: events[0].artifactKey,
         input_subject_ids: events[0].inputSubjectIds,
         input_task_ids: events[0].inputTaskIds,
-      })]),
-    ]))
+      }),
+    ])
   })
 
   it.each(['duration_prediction', 'wbs_candidate'] as const)(

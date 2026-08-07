@@ -469,7 +469,7 @@ export async function enqueueDurationLearningRuntimeEvidenceBatch(input: {
        returning event_key
      )
      select event_key from persisted`,
-    [rows],
+    [JSON.stringify(rows)],
   )
   if (persisted.length !== rows.length) {
     throw new Error(`duration_learning_runtime_evidence_outbox_authority_mismatch:${rows.length}:${persisted.length}`)

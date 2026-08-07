@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   getTasks: vi.fn(),
   listTaskProgressSnapshotsByTaskIds: vi.fn(),
   recordTaskProgressSnapshot: vi.fn(),
+  flushTaskProgressSnapshotProjectSideEffects: vi.fn(),
 }))
 
 vi.mock('../services/dbService.js', () => ({
@@ -12,6 +13,7 @@ vi.mock('../services/dbService.js', () => ({
   getTasks: mocks.getTasks,
   listTaskProgressSnapshotsByTaskIds: mocks.listTaskProgressSnapshotsByTaskIds,
   recordTaskProgressSnapshot: mocks.recordTaskProgressSnapshot,
+  flushTaskProgressSnapshotProjectSideEffects: mocks.flushTaskProgressSnapshotProjectSideEffects,
 }))
 
 import {
@@ -47,6 +49,7 @@ describe('task progress snapshot reconciliation', () => {
       },
     ])
     mocks.recordTaskProgressSnapshot.mockResolvedValue(undefined)
+    mocks.flushTaskProgressSnapshotProjectSideEffects.mockResolvedValue(undefined)
     mocks.getProjects.mockResolvedValue([
       { id: 'project-1', status: 'active' },
       { id: 'project-archived', status: 'archived' },
@@ -80,7 +83,7 @@ describe('task progress snapshot reconciliation', () => {
     })
   })
 
-  it('writes an auditable system reconciliation event for every drifted task', async () => {
+  it('writes every reconciliation event without per-task refreshes and flushes project effects once', async () => {
     const result = await reconcileProjectTaskProgressSnapshots('project-1')
 
     expect(result).toMatchObject({ scanned: 3, driftCount: 2, repaired: 2, failed: 0 })
@@ -91,7 +94,16 @@ describe('task progress snapshot reconciliation', () => {
         eventType: 'task_reconciled',
         eventSource: 'system_auto',
         notes: expect.stringContaining('state_mismatch'),
+        deferProjectSideEffects: true,
       }),
+    )
+    expect(mocks.recordTaskProgressSnapshot.mock.calls.every(([, options]) => (
+      options?.deferProjectSideEffects === true
+    ))).toBe(true)
+    expect(mocks.flushTaskProgressSnapshotProjectSideEffects).toHaveBeenCalledOnce()
+    expect(mocks.flushTaskProgressSnapshotProjectSideEffects).toHaveBeenCalledWith(
+      'project-1',
+      'task_reconciled',
     )
   })
 

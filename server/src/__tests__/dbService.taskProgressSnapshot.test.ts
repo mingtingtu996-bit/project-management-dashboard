@@ -109,4 +109,29 @@ describe('dbService recordTaskProgressSnapshot', () => {
     expect(params[20]).toBe('monthly_plan')
     expect(state.upsert).not.toHaveBeenCalled()
   })
+
+  it('flushes deferred project effects once and keeps their database work sequential', async () => {
+    const dbService = await import('../services/dbService.js')
+    expect(dbService.flushTaskProgressSnapshotProjectSideEffects).toBeTypeOf('function')
+
+    const calls: string[] = []
+    let active = 0
+    let maxActive = 0
+    const run = async (name: string) => {
+      active += 1
+      maxActive = Math.max(maxActive, active)
+      await Promise.resolve()
+      calls.push(name)
+      active -= 1
+    }
+    dbService.registerDbServiceBusinessSideEffectAdapters({
+      enqueueProjectHealthUpdate: () => run('health'),
+      syncProjectDataQuality: () => run('data-quality'),
+    })
+
+    await dbService.flushTaskProgressSnapshotProjectSideEffects('project-batch', 'task_reconciled')
+
+    expect(calls).toEqual(['health', 'data-quality'])
+    expect(maxActive).toBe(1)
+  })
 })
