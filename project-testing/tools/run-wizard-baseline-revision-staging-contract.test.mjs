@@ -1066,6 +1066,10 @@ test('ordinary staging user completes the full wizard and baseline smoke when ad
     ) {
       generationStatusRequestCount += 1
       if (generationStatusRequestCount === 1) {
+        sendError(500, 'AUTH_ERROR', 'transient auth lookup failure')
+        return
+      }
+      if (generationStatusRequestCount === 2) {
         send(200, {
           projectId,
           attemptId: generationAttemptId,
@@ -1208,6 +1212,8 @@ test('ordinary staging user completes the full wizard and baseline smoke when ad
       '--report', reportPath,
       '--generation-poll-attempts', '5',
       '--generation-poll-delay-ms', '10',
+      '--generation-status-retry-attempts', '2',
+      '--generation-status-retry-delay-ms', '10',
     ], { cwd: workspaceRoot })
     let stderr = ''
     child.stderr.on('data', (chunk) => { stderr += chunk })
@@ -1222,7 +1228,7 @@ test('ordinary staging user completes the full wizard and baseline smoke when ad
   assert.equal(accuracyRequestCount, 1)
   assert.equal(previewRequestCount, canonicalBusinessPreviewCases.length)
   assert.equal(commitRequestBody?.asyncGeneration, true)
-  assert.equal(generationStatusRequestCount, 2)
+  assert.equal(generationStatusRequestCount, 3)
   const report = childReport
   assert.equal(report.status, 'pass')
   assert.equal(report.steps.durationAccuracyReadback.status, 'unavailable')
@@ -1325,6 +1331,9 @@ test('staging smoke fails closed and cleans up when async wizard generation fail
       && requestUrl.pathname === `/api/projects/${projectId}/wizard/generation/${generationAttemptId}`
     ) {
       generationStatusRequestCount += 1
+      if (generationStatusState === 'running' && generationStatusRequestCount >= 3) {
+        generationStatusState = 'failed'
+      }
       send(200, {
         projectId,
         attemptId: generationAttemptId,
@@ -1415,7 +1424,7 @@ test('staging smoke fails closed and cleans up when async wizard generation fail
   const timeoutChildResult = await runSmoke(timeoutReportPath)
 
   assert.equal(timeoutChildResult.code, 1)
-  assert.equal(generationStatusRequestCount, 2)
+  assert.equal(generationStatusRequestCount, 3)
   assert.equal(downstreamReadCount, 0)
   assert.equal(project, null)
   const timeoutReport = JSON.parse(fs.readFileSync(timeoutReportPath, 'utf8'))
