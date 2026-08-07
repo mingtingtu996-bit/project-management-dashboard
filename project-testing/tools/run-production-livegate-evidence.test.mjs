@@ -163,6 +163,40 @@ test('project residue scan is type-aware and fails closed on incomplete table re
   assert.equal(readback.reason, 'project_residue_scan_count_readback_incomplete');
 });
 
+test('project residue scan retains duration learning outbox tombstones as historical audit residue', async () => {
+  const projectResidues = {
+    duration_learning_runtime_evidence_outbox_tombstones: 1,
+    tasks: 0,
+  };
+  const queryExec = async (sql) => {
+    if (sql.includes('information_schema.columns')) {
+      return Object.keys(projectResidues).sort().map((tableName) => ({
+        table_name: tableName,
+        data_type: 'uuid',
+        udt_name: 'uuid',
+      }));
+    }
+    if (sql.includes('workbuddy_c19_project_residue_scan')) {
+      return Object.entries(projectResidues).map(([tableName, residueCount]) => ({
+        table_name: tableName,
+        residue_count: residueCount,
+      }));
+    }
+    throw new Error(`Unexpected residue query: ${sql}`);
+  };
+
+  const readback = await readProjectBusinessResidueReadback(queryExec, { projectId: PROJECT_ID });
+
+  assert.equal(readback.status, 'pass');
+  assert.equal(readback.reason, null);
+  assert.deepEqual(readback.retainedHistoricalResidue, [
+    { tableName: 'duration_learning_runtime_evidence_outbox_tombstones', rowCount: 1 },
+  ]);
+  assert.equal(readback.totalRetainedHistoricalResidueCount, 1);
+  assert.deepEqual(readback.nonZeroBusinessTables, []);
+  assert.equal(readback.totalBusinessResidueCount, 0);
+});
+
 test('production livegate workflow runs a same-SHA disposable wizard smoke with always cleanup and canonical handoff', async () => {
   const workflow = await readFile(
     path.resolve('.github/workflows/production-livegate-execution.yml'),

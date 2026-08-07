@@ -6,7 +6,10 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { validateReleaseEvidence } from './validate-release-evidence.mjs';
-import { hashProjectBusinessResidueReadback } from './project-residue-policy.mjs';
+import {
+  hashProjectBusinessResidueReadback,
+  RETAINED_HISTORICAL_PROJECT_REFERENCE_TABLES,
+} from './project-residue-policy.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const matrixPath = path.join(repoRoot, 'project-testing/matrix/release-test-matrix.json');
@@ -660,7 +663,7 @@ async function writeC19EvidenceArtifacts(evidenceRoot, { nonZeroBusinessTables =
     projectId,
     scannedTableCount: 2,
     scannedTables: ['operation_logs', 'tasks'],
-    retainedHistoricalProjectReferenceTables: ['operation_logs'],
+    retainedHistoricalProjectReferenceTables: [...RETAINED_HISTORICAL_PROJECT_REFERENCE_TABLES],
     retainedHistoricalResidue: [{ tableName: 'operation_logs', rowCount: 1 }],
     totalRetainedHistoricalResidueCount: 1,
     nonZeroBusinessTables,
