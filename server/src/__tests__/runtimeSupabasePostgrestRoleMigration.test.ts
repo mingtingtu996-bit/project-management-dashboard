@@ -19,6 +19,15 @@ describe('runtime Supabase PostgREST role migration', () => {
     expect(forward).toMatch(/GRANT\s+workbuddy_runtime\s+TO\s+authenticator\s*;/i)
     expect(forward).not.toMatch(/WITH\s+ADMIN\s+OPTION/i)
     expect(forward).not.toMatch(/GRANT\s+workbuddy_runtime\s+TO\s+(anon|authenticated|service_role)/i)
+    expect(forward).toMatch(/rolsuper[\s\S]+rolcanlogin[\s\S]+rolbypassrls/i)
+    expect(forward).toContain('workbuddy_runtime must remain NOSUPERUSER NOLOGIN NOBYPASSRLS')
+    expect(forward).toMatch(/ARRAY\['anon',\s*'authenticated',\s*'service_role'\]/i)
+    expect(forward).toMatch(/pg_has_role\(forbidden_role,\s*'workbuddy_runtime',\s*'member'\)/i)
+    expect(forward).toMatch(/IF NOT pg_has_role\('authenticator',\s*'workbuddy_runtime',\s*'member'\)/i)
+    expect(forward).toMatch(/pg_auth_members[\s\S]+admin_option\s*=\s*false/i)
+    expect(forward).toMatch(/IF\s+EXISTS\s*\([\s\S]+membership\.admin_option\s*=\s*true/i)
+    expect(forward).toContain('authenticator must not retain ADMIN OPTION on workbuddy_runtime')
+    expect(forward.match(/FOREACH forbidden_role IN ARRAY ARRAY\['anon', 'authenticated', 'service_role'\]/g)).toHaveLength(2)
   })
 
   it('removes only the PostgREST role membership during rollback', () => {
@@ -29,6 +38,8 @@ describe('runtime Supabase PostgREST role migration', () => {
 
     expect(rollback).toMatch(/REVOKE\s+workbuddy_runtime\s+FROM\s+authenticator\s*;/i)
     expect(rollback).not.toMatch(/DROP\s+ROLE/i)
+    expect(rollback).toMatch(/IF pg_has_role\('authenticator',\s*'workbuddy_runtime',\s*'member'\)/i)
+    expect(rollback).toContain('migration 336 rollback did not revoke authenticator membership')
   })
 
   it('requires an explicit staging-first authorization before migration 336 can run', () => {
