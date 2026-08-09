@@ -46,6 +46,7 @@ describe('runtime deployment security contract', () => {
     expect(workerSection).toContain('DB_SQL_EXECUTION_MODE: direct')
     expect(workerSection).toContain('DB_POOL_MAX: "5"')
     expect(workerSection).toContain('DB_POOL_WARM_CONNECTIONS: "1"')
+    expect(workerSection).toContain('DB_CONNECTION_TIMEOUT_MS: "15000"')
     expect(workerSection).not.toMatch(/^\s+ports:/m)
     expect(workerSection).not.toContain('expose:')
   })
