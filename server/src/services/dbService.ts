@@ -2,7 +2,6 @@
 // 封装所有数据库操作，对外接口与原 dbService.ts 完全兼容
 // 使用 @supabase/supabase-js SDK + Supabase REST API
 
-import { createClient } from '@supabase/supabase-js'
 import { v4 as uuidv4 } from 'uuid'
 import type {
   Project,
@@ -45,7 +44,10 @@ import {
 } from '../domain/riskIssueWorkflowPolicy.js'
 import { classifyProgressSnapshotSource, normalizeProgressSnapshotSource } from '../utils/progressSnapshotSource.js'
 import { shouldRecordTaskProgressSnapshot } from '../utils/taskProgressSnapshotPolicy.js'
-import { resolveSupabaseRuntimeKey } from './runtimeCredentialBoundary.js'
+import {
+  createSupabaseRuntimeClient,
+  resolveSupabaseRuntimeClientCredentials,
+} from './runtimeCredentialBoundary.js'
 import { createJobLeaseFencedFetch } from './jobLeaseFenceContext.js'
 import {
   recordChangedExecutionFacts,
@@ -110,13 +112,13 @@ function runBusinessSideEffect(
 
 // ─── Supabase 初始化 ──────────────────────────────────────────────────────────
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || ''
-const supabaseKey = resolveSupabaseRuntimeKey()
+const { gatewayKey: supabaseGatewayKey, runtimeKey: supabaseRuntimeKey } = resolveSupabaseRuntimeClientCredentials()
 
-if (!supabaseUrl || !supabaseKey) {
-  console.warn('[dbService] WARNING: SUPABASE_URL or SUPABASE_KEY not set')
+if (!supabaseUrl || !supabaseGatewayKey || !supabaseRuntimeKey) {
+  console.warn('[dbService] WARNING: SUPABASE_URL, SUPABASE_ANON_KEY, or SUPABASE_RUNTIME_KEY not set')
 }
 
-const supabase = createClient(supabaseUrl, supabaseKey, {
+const supabase = createSupabaseRuntimeClient(supabaseUrl, {
   global: {
     fetch: createJobLeaseFencedFetch(),
   },

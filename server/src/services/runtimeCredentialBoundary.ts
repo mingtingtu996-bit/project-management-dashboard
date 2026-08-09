@@ -1,4 +1,7 @@
+import { createClient } from '@supabase/supabase-js'
+
 type RuntimeCredentialEnv = Record<string, string | undefined>
+type SupabaseClientOptions = NonNullable<Parameters<typeof createClient>[2]>
 
 const EXPECTED_SUPABASE_RUNTIME_ROLE = 'workbuddy_runtime'
 const COMPACT_JWT_SEGMENT_PATTERN = /^[A-Za-z0-9_-]+$/
@@ -12,6 +15,43 @@ export function resolveSupabaseRuntimeKey(env: RuntimeCredentialEnv = process.en
     || env.SUPABASE_ANON_KEY?.trim()
     || env.VITE_SUPABASE_ANON_KEY?.trim()
     || ''
+}
+
+export function resolveSupabaseGatewayKey(env: RuntimeCredentialEnv = process.env) {
+  return env.SUPABASE_ANON_KEY?.trim()
+    || env.VITE_SUPABASE_ANON_KEY?.trim()
+    || ''
+}
+
+export function resolveSupabaseRuntimeClientCredentials(env: RuntimeCredentialEnv = process.env) {
+  return {
+    gatewayKey: resolveSupabaseGatewayKey(env),
+    runtimeKey: resolveSupabaseRuntimeKey(env),
+  }
+}
+
+export function hasSupabaseRuntimeClientCredentials(env: RuntimeCredentialEnv = process.env) {
+  const credentials = resolveSupabaseRuntimeClientCredentials(env)
+  return Boolean(credentials.gatewayKey && credentials.runtimeKey)
+}
+
+export function createSupabaseRuntimeClient(
+  supabaseUrl: string,
+  options: SupabaseClientOptions = {},
+  env: RuntimeCredentialEnv = process.env,
+) {
+  const { gatewayKey, runtimeKey } = resolveSupabaseRuntimeClientCredentials(env)
+
+  return createClient(supabaseUrl, gatewayKey, {
+    ...options,
+    global: {
+      ...options.global,
+      headers: {
+        ...options.global?.headers,
+        Authorization: `Bearer ${runtimeKey}`,
+      },
+    },
+  })
 }
 
 function decodeCompactJwtSegment(segment: string, label: string) {
@@ -76,5 +116,12 @@ export function assertProductionApiCredentialBoundary(env: RuntimeCredentialEnv 
   if (!hasValue(env.SUPABASE_RUNTIME_KEY)) {
     throw new Error('SUPABASE_RUNTIME_KEY is required in production and must represent a non-BYPASSRLS application role')
   }
-  assertSupabaseRuntimeKeyClaims(env.SUPABASE_RUNTIME_KEY!.trim())
+  if (!hasValue(env.SUPABASE_ANON_KEY)) {
+    throw new Error('SUPABASE_ANON_KEY is required in production as the registered Supabase gateway apikey')
+  }
+  const runtimeKey = env.SUPABASE_RUNTIME_KEY!.trim()
+  if (runtimeKey === env.SUPABASE_ANON_KEY!.trim()) {
+    throw new Error('SUPABASE_ANON_KEY and SUPABASE_RUNTIME_KEY must be distinct credentials')
+  }
+  assertSupabaseRuntimeKeyClaims(runtimeKey)
 }

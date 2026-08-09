@@ -153,7 +153,8 @@ import {
 } from './services/runtimeHealthService.js'
 import {
   assertProductionApiCredentialBoundary,
-  resolveSupabaseRuntimeKey,
+  createSupabaseRuntimeClient,
+  hasSupabaseRuntimeClientCredentials,
 } from './services/runtimeCredentialBoundary.js'
 import { recoverTaskBatchUpdateJobs } from './services/taskBatchUpdateService.js'
 import {
@@ -208,12 +209,9 @@ async function validateDatabaseConnection() {
   try {
     const warmup = await warmDatabasePool()
 
-    const supabaseRuntimeKey = resolveSupabaseRuntimeKey()
-    if (process.env.SUPABASE_URL && supabaseRuntimeKey) {
-      const { createClient } = await import('@supabase/supabase-js')
-      const serviceClient = createClient(
+    if (process.env.SUPABASE_URL && hasSupabaseRuntimeClientCredentials()) {
+      const serviceClient = createSupabaseRuntimeClient(
         process.env.SUPABASE_URL,
-        supabaseRuntimeKey,
         {
           auth: {
             persistSession: false,
@@ -232,7 +230,7 @@ async function validateDatabaseConnection() {
     logger.info('Database connection validated', warmup)
   } catch (error) {
     logger.error('数据库连接验证失败', error)
-    logger.error('请检查服务端数据库连接配置；如启用 Supabase REST smoke，请检查 SUPABASE_URL 和 SUPABASE_RUNTIME_KEY')
+    logger.error('请检查服务端数据库连接配置；如启用 Supabase REST smoke，请检查 SUPABASE_URL、SUPABASE_ANON_KEY 和 SUPABASE_RUNTIME_KEY')
     process.exit(1)
   }
 }

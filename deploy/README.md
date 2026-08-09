@@ -78,6 +78,10 @@ authenticated, service-role, malformed, or expired token is rejected before
 database migration and again at API/worker startup. The token must never be
 used as a `VITE_*` value or sent to a browser.
 
+For backend REST calls, `SUPABASE_ANON_KEY` is the registered gateway `apikey`
+and `SUPABASE_RUNTIME_KEY` is used only as the `Authorization: Bearer` token.
+The two credentials must be present and distinct.
+
 The local deployment guard validates compact JWT serialization and required
 claims only. Supabase PostgREST remains responsible for cryptographically
 verifying the JWT signature before it assumes the database role.

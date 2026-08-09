@@ -45,8 +45,9 @@ describe('server bootstrap isolation', () => {
     )
 
     expect(validateDatabaseConnection).toContain('warmDatabasePool()')
-    expect(validateDatabaseConnection).toContain('resolveSupabaseRuntimeKey()')
-    expect(validateDatabaseConnection).not.toContain('SUPABASE_ANON_KEY')
+    expect(validateDatabaseConnection).toContain('createSupabaseRuntimeClient(')
+    expect(validateDatabaseConnection).not.toContain('createClient(')
+    expect(validateDatabaseConnection).not.toContain('process.env.SUPABASE_ANON_KEY')
     expect(validateDatabaseConnection).not.toContain('SUPABASE_SERVICE_KEY')
     expect(validateDatabaseConnection).not.toContain(".from('projects').select('id').limit(1)")
     expect(validateDatabaseConnection).toContain(".from('status_dictionary_versions')")

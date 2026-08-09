@@ -209,13 +209,22 @@ validate_runtime_slot
   echo "SUPABASE_SERVICE_KEY is forbidden in the API runtime env file." >&2
   exit 1
 }
+supabase_anon_key="$(read_env_value SUPABASE_ANON_KEY)"
+[ -n "$supabase_anon_key" ] || {
+  echo "SUPABASE_ANON_KEY is required as the registered Supabase gateway apikey." >&2
+  exit 1
+}
 supabase_runtime_key="$(read_env_value SUPABASE_RUNTIME_KEY)"
 [ -n "$supabase_runtime_key" ] || {
   echo "SUPABASE_RUNTIME_KEY is required and must represent a non-BYPASSRLS application role." >&2
   exit 1
 }
+[ "$supabase_anon_key" != "$supabase_runtime_key" ] || {
+  echo "SUPABASE_ANON_KEY and SUPABASE_RUNTIME_KEY must be distinct credentials." >&2
+  exit 1
+}
 validate_supabase_runtime_key_claim "$supabase_runtime_key"
-unset supabase_runtime_key
+unset supabase_anon_key supabase_runtime_key
 
 case "$DEPLOY_TARGET" in
   production)

@@ -24,13 +24,25 @@ describe('runtime Supabase credential boundary', () => {
   })
 
   it('requires a dedicated non-bypass runtime key in production', () => {
+    const runtimeKey = buildRuntimeJwt('workbuddy_runtime')
+
     expect(() => assertProductionApiCredentialBoundary({
       NODE_ENV: 'production',
       SUPABASE_ANON_KEY: 'anon-key',
     })).toThrow(/SUPABASE_RUNTIME_KEY/)
     expect(() => assertProductionApiCredentialBoundary({
       NODE_ENV: 'production',
-      SUPABASE_RUNTIME_KEY: buildRuntimeJwt('workbuddy_runtime'),
+      SUPABASE_RUNTIME_KEY: runtimeKey,
+    })).toThrow(/SUPABASE_ANON_KEY/)
+    expect(() => assertProductionApiCredentialBoundary({
+      NODE_ENV: 'production',
+      SUPABASE_ANON_KEY: runtimeKey,
+      SUPABASE_RUNTIME_KEY: runtimeKey,
+    })).toThrow(/distinct/)
+    expect(() => assertProductionApiCredentialBoundary({
+      NODE_ENV: 'production',
+      SUPABASE_ANON_KEY: 'anon-key',
+      SUPABASE_RUNTIME_KEY: runtimeKey,
     })).not.toThrow()
   })
 
@@ -39,6 +51,7 @@ describe('runtime Supabase credential boundary', () => {
     (role) => {
       expect(() => assertProductionApiCredentialBoundary({
         NODE_ENV: 'production',
+        SUPABASE_ANON_KEY: 'anon-key',
         SUPABASE_RUNTIME_KEY: buildRuntimeJwt(role),
       })).toThrow(/workbuddy_runtime/)
     },
@@ -47,10 +60,12 @@ describe('runtime Supabase credential boundary', () => {
   it('rejects malformed and expired backend runtime JWTs', () => {
     expect(() => assertProductionApiCredentialBoundary({
       NODE_ENV: 'production',
+      SUPABASE_ANON_KEY: 'anon-key',
       SUPABASE_RUNTIME_KEY: 'not-a-jwt',
     })).toThrow(/JWT/)
     expect(() => assertProductionApiCredentialBoundary({
       NODE_ENV: 'production',
+      SUPABASE_ANON_KEY: 'anon-key',
       SUPABASE_RUNTIME_KEY: buildRuntimeJwt('workbuddy_runtime', Math.floor(Date.now() / 1000) - 1),
     })).toThrow(/expired/)
   })
@@ -64,6 +79,7 @@ describe('runtime Supabase credential boundary', () => {
     ]) {
       expect(() => assertProductionApiCredentialBoundary({
         NODE_ENV: 'production',
+        SUPABASE_ANON_KEY: 'anon-key',
         SUPABASE_RUNTIME_KEY: runtimeKey,
       })).toThrow(/compact JWT/)
     }
