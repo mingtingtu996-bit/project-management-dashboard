@@ -1,4 +1,4 @@
--- CANONICAL: current clean bootstrap bundle, synchronized through migration 335
+-- CANONICAL: current clean bootstrap bundle, synchronized through migration 336
 -- CLEAN MIGRATION (UTF-8, no encoding issues)
 -- Generated: 2026-03-26 02:39
 -- All numbered migration files merged
@@ -4676,6 +4676,7 @@ END $$;
 NOTIFY pgrst, 'reload schema';
 
 COMMIT;
+
 -- ============================================================
 -- Source: 121_add_wbs_engineering_categories.sql
 -- ============================================================
@@ -23722,5 +23723,26 @@ CREATE POLICY duration_learning_legacy_runtime_retirement_state_deny_all
   WITH CHECK (false);
 
 NOTIFY pgrst, 'reload schema';
+
+COMMIT;
+
+-- ============================================================
+-- Source: 336_runtime_postgrest_role_boundary.sql
+-- ============================================================
+-- Allow the private backend runtime JWT to assume the existing RLS-governed role.
+
+BEGIN;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'workbuddy_runtime') THEN
+    RAISE EXCEPTION 'workbuddy_runtime role is required before applying migration 336';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticator') THEN
+    RAISE EXCEPTION 'authenticator role is required before applying migration 336';
+  END IF;
+END $$;
+
+GRANT workbuddy_runtime TO authenticator;
 
 COMMIT;

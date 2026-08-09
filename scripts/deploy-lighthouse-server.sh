@@ -158,16 +158,64 @@ validate_jwt_secret_fingerprints() {
   }
 }
 
+validate_supabase_runtime_key_claim() {
+  local runtime_key="$1"
+  printf '%s' "$runtime_key" | python3 -c '
+import base64
+import binascii
+import json
+import re
+import sys
+import time
+
+token = sys.stdin.read().strip()
+parts = token.split(".")
+
+def decode_segment(segment, label):
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", segment) or len(segment) % 4 == 1:
+        raise ValueError(f"invalid compact JWT {label}")
+    raw = base64.urlsafe_b64decode(segment + "=" * (-len(segment) % 4))
+    if not raw or base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=") != segment:
+        raise ValueError(f"invalid compact JWT {label}")
+    return raw
+
+try:
+    if len(parts) != 3 or not all(parts):
+        raise ValueError("invalid JWT structure")
+    header = json.loads(decode_segment(parts[0], "header").decode("utf-8"))
+    payload = json.loads(decode_segment(parts[1], "payload").decode("utf-8"))
+    decode_segment(parts[2], "signature")
+except (ValueError, UnicodeDecodeError, json.JSONDecodeError, binascii.Error):
+    print("SUPABASE_RUNTIME_KEY must use valid compact JWT serialization.", file=sys.stderr)
+    raise SystemExit(1)
+
+algorithm = header.get("alg") if isinstance(header, dict) else None
+if not isinstance(algorithm, str) or not algorithm.strip() or algorithm.lower() == "none":
+    print("SUPABASE_RUNTIME_KEY JWT header must declare a signing algorithm.", file=sys.stderr)
+    raise SystemExit(1)
+if not isinstance(payload, dict) or payload.get("role") != "workbuddy_runtime":
+    print("SUPABASE_RUNTIME_KEY JWT role must be workbuddy_runtime.", file=sys.stderr)
+    raise SystemExit(1)
+expires_at = payload.get("exp")
+if isinstance(expires_at, bool) or not isinstance(expires_at, int) or expires_at <= int(time.time()):
+    print("SUPABASE_RUNTIME_KEY JWT is expired or has no valid expiry.", file=sys.stderr)
+    raise SystemExit(1)
+'
+}
+
 validate_runtime_slot
 
 [ -z "$(read_env_value SUPABASE_SERVICE_KEY)" ] || {
   echo "SUPABASE_SERVICE_KEY is forbidden in the API runtime env file." >&2
   exit 1
 }
-[ -n "$(read_env_value SUPABASE_RUNTIME_KEY)" ] || {
+supabase_runtime_key="$(read_env_value SUPABASE_RUNTIME_KEY)"
+[ -n "$supabase_runtime_key" ] || {
   echo "SUPABASE_RUNTIME_KEY is required and must represent a non-BYPASSRLS application role." >&2
   exit 1
 }
+validate_supabase_runtime_key_claim "$supabase_runtime_key"
+unset supabase_runtime_key
 
 case "$DEPLOY_TARGET" in
   production)

@@ -70,6 +70,31 @@ must pass the real public origin explicitly; `scripts/browser-auth-fixture.mjs`
 uses `PUBLIC_HTTPS_ORIGIN` for the same purpose. A controlled domain remains the
 final isolation and HSTS boundary.
 
+## Backend Supabase runtime role
+
+`SUPABASE_RUNTIME_KEY` is a private backend JWT. Its payload role must be
+exactly `workbuddy_runtime` and it must have a future integer `exp`; an anon,
+authenticated, service-role, malformed, or expired token is rejected before
+database migration and again at API/worker startup. The token must never be
+used as a `VITE_*` value or sent to a browser.
+
+The local deployment guard validates compact JWT serialization and required
+claims only. Supabase PostgREST remains responsible for cryptographically
+verifying the JWT signature before it assumes the database role.
+
+Migration `336_runtime_postgrest_role_boundary.sql` grants only the Supabase
+PostgREST `authenticator` role permission to assume `workbuddy_runtime`. It
+does not grant the backend role to `anon`, `authenticated`, or `service_role`.
+Provision the signed runtime JWT through the protected environment and host
+runtime-secret process; never substitute the public anon key. Keep the direct
+database login on the separate `workbuddy_runtime_login` role.
+
+The protected deployment workflow applies migration 336 only when the target
+GitHub environment variable `MIGRATION_336_APPROVED_SHA` exactly matches the
+release SHA. Production also requires `MIGRATION_336_STAGING_EVIDENCE_REF` to
+contain the successful staging deployment run URL, keeping staging readback
+and production promotion separate.
+
 ## Production Advisor ACL Remediation 308
 
 Production migration 308 is a one-time bootstrap exception for the two

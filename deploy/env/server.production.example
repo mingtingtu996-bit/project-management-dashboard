@@ -18,6 +18,8 @@ JWT_AUDIENCE=workbuddy-production-api
 JWT_SECRET=
 
 SUPABASE_URL=https://your-project.supabase.co
+# Private server-only JWT: payload role must equal workbuddy_runtime. Migration
+# 336 grants PostgREST authenticator only the ability to assume that role.
 SUPABASE_RUNTIME_KEY=YOUR_NON_BYPASSRLS_RUNTIME_JWT_HERE
 SUPABASE_ANON_KEY=YOUR_SUPABASE_ANON_KEY_HERE
 VITE_SUPABASE_URL=https://your-project.supabase.co
