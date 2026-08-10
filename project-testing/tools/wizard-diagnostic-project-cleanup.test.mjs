@@ -116,9 +116,37 @@ test('physically deletes only the exact disposable wizard diagnostic project and
     diagnosticSource: 'wizard_baseline_revision_live_probe',
     targetEnvironment: 'staging',
     releaseSha: '5d5c8f57f4584560bd3c7d0932dfca364bcaa5ab',
+    diagnosticReleaseSha: '5d5c8f57f4584560bd3c7d0932dfca364bcaa5ab',
     cleanupPolicy: 'guarded_migration_connection_same_transaction',
   })
   assert.deepEqual(harness.clientConfigs[0]?.ssl, { rejectUnauthorized: true })
+})
+
+test('cleans a historical diagnostic project while preserving the current cleanup release identity', async () => {
+  const harness = buildHarness()
+  const diagnosticReleaseSha = '5d5c8f57f4584560bd3c7d0932dfca364bcaa5ab'
+  const cleanupReleaseSha = '7f3ae1cce4241fb1529fb4db7f8e8972b16f116a'
+
+  await cleanupWizardDiagnosticProject({
+    ...cleanupInput(),
+    releaseSha: cleanupReleaseSha,
+    diagnosticReleaseSha,
+  }, {
+    createClient: harness.createClient,
+  })
+
+  assert.equal(harness.isProjectPresent(), false)
+  const auditCall = harness.calls.find(([sql]) => String(sql).includes('INSERT INTO public.operation_logs'))
+  assert.ok(auditCall)
+  assert.deepEqual(JSON.parse(String(auditCall[1][4])), {
+    companyId,
+    diagnosticRunId,
+    diagnosticSource: 'wizard_baseline_revision_live_probe',
+    targetEnvironment: 'staging',
+    releaseSha: cleanupReleaseSha,
+    diagnosticReleaseSha,
+    cleanupPolicy: 'guarded_migration_connection_same_transaction',
+  })
 })
 
 test('enforces TLS certificate verification even when the supplied URL requests no verification', async () => {

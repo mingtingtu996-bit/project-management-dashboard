@@ -530,6 +530,7 @@ const result = {
   deployedStagingCode,
   deployedReadiness,
   releaseSha: releaseSha || null,
+  cleanupSourceReleaseSha: null,
   productionLive,
   mutationBoundary: productionLive
     ? 'explicitly_approved_disposable_production_project_only_created_adjusted_confirmed_revised_then_physically_deleted'
@@ -555,6 +556,7 @@ let projectId = plannedProjectId
 let createRequestOutcome = 'not_started'
 let activeGenerationAttemptId = null
 let activeGenerationTerminal = false
+let cleanupSourceReleaseSha = releaseSha
 
 function writeResultReport() {
   result.generatedAt = new Date().toISOString()
@@ -821,6 +823,7 @@ async function cleanupProject(targetProjectId = projectId) {
         diagnosticRunId: result.diagnosticRunId,
         projectName: result.projectName,
         releaseSha,
+        diagnosticReleaseSha: cleanupSourceReleaseSha,
         actorUsername: testUsername,
         tlsCaCertificate: diagnosticCleanupTlsCaCertificate || undefined,
       })
@@ -1007,6 +1010,11 @@ async function waitForUncertainProjectCreation(targetProjectId) {
 if (cleanupSourceReportPath) {
   try {
     const previousResult = JSON.parse(fs.readFileSync(cleanupSourceReportPath, 'utf8'))
+    cleanupSourceReleaseSha = String(previousResult?.releaseSha ?? '').trim().toLowerCase()
+    if (!/^[0-9a-f]{40}$/.test(cleanupSourceReleaseSha)) {
+      throw new Error('cleanup report release SHA must be a 40-character Git SHA')
+    }
+    result.cleanupSourceReleaseSha = cleanupSourceReleaseSha
     projectId = String(previousResult?.projectId ?? '').trim() || null
     result.projectId = projectId
     result.diagnosticRunId = requireValue(previousResult?.diagnosticRunId, 'cleanup report diagnostic run id')

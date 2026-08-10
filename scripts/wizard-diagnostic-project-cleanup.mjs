@@ -138,6 +138,10 @@ function validateInput(input) {
   if (!/^[0-9a-f]{40}$/.test(releaseSha)) {
     throw new Error('diagnostic cleanup release SHA must be a 40-character Git SHA')
   }
+  const diagnosticReleaseSha = String(input.diagnosticReleaseSha ?? releaseSha).trim().toLowerCase()
+  if (!/^[0-9a-f]{40}$/.test(diagnosticReleaseSha)) {
+    throw new Error('diagnostic project release SHA must be a 40-character Git SHA')
+  }
 
   const now = input.now instanceof Date ? input.now : new Date(input.now ?? Date.now())
   const nowMs = now.getTime()
@@ -155,6 +159,7 @@ function validateInput(input) {
     diagnosticRunId,
     projectName,
     releaseSha,
+    diagnosticReleaseSha,
     actorUsername: String(input.actorUsername ?? '').trim() || null,
     runTimestampMs,
   }
@@ -173,7 +178,7 @@ function assertPersistedDiagnosticIdentity(project, input) {
     && String(metadata.diagnosticRunId ?? '').trim() === input.diagnosticRunId
     && String(metadata.diagnosticSource ?? '').trim() === DIAGNOSTIC_SOURCE
     && String(metadata.diagnosticProjectName ?? '').trim() === input.projectName
-    && (!persistedReleaseSha || persistedReleaseSha === input.releaseSha)
+    && (!persistedReleaseSha || persistedReleaseSha === input.diagnosticReleaseSha)
     && createdNearRun
   if (!matches) {
     throw new Error('persisted diagnostic project identity does not match the cleanup request')
@@ -272,6 +277,7 @@ export async function cleanupWizardDiagnosticProject(input, dependencies = {}) {
           diagnosticSource: DIAGNOSTIC_SOURCE,
           targetEnvironment: validated.targetEnvironment,
           releaseSha: validated.releaseSha,
+          diagnosticReleaseSha: validated.diagnosticReleaseSha,
           cleanupPolicy: 'guarded_migration_connection_same_transaction',
         }),
       ],
