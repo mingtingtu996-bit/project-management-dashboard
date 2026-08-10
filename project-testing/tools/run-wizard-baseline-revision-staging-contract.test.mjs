@@ -235,6 +235,10 @@ test('staging can clean an explicitly approved prior wizard smoke artifact witho
   assert.match(stagingDiagnosticCleanupWorkflowSource, /verify-wizard-diagnostic-cleanup-connection\.mjs/)
   assert.match(stagingDiagnosticCleanupWorkflowSource, /actions\/download-artifact@v7[\s\S]+run-id: \$\{\{ inputs\.source_run_id \}\}/)
   assert.match(stagingDiagnosticCleanupWorkflowSource, /--cleanup-report "\$source_smoke_report"/)
+  assert.match(smokeSource, /cleanupSourceReleaseSha/)
+  assert.match(smokeSource, /diagnosticReleaseSha: cleanupSourceReleaseSha/)
+  assert.match(stagingDiagnosticCleanupWorkflowSource, /cleanup\?\.releaseSha !== process\.env\.RELEASE_SHA/)
+  assert.match(stagingDiagnosticCleanupWorkflowSource, /cleanup\?\.cleanupSourceReleaseSha !== source\?\.releaseSha/)
   assert.match(stagingDiagnosticCleanupWorkflowSource, /staging-wizard-residual-cleanup\.json/)
 })
 

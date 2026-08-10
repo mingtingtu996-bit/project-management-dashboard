@@ -212,6 +212,8 @@ jobs:
           const cleanup = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'))
           if (cleanup?.status !== 'pass'
             || cleanup?.projectId !== source?.projectId
+            || cleanup?.releaseSha !== process.env.RELEASE_SHA
+            || cleanup?.cleanupSourceReleaseSha !== source?.releaseSha
             || cleanup?.cleanup?.projectPhysicallyDeleted !== true
             || cleanup?.cleanup?.projectUnreadable !== true
             || cleanup?.cleanup?.databaseProjectRefVerified !== true
