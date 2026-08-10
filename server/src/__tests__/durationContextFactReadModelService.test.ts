@@ -132,18 +132,85 @@ describe('durationContextFactReadModelService', () => {
     expect(calls[2].in).toContainEqual(['id', ['material-1']])
   })
 
-  it('reads task material rows by linked task when no explicit material ids exist', async () => {
-    rowsByTable.set('project_materials', [{ id: 'material-linked' }])
+  it('merges canonical task condition material references with explicit material ids', async () => {
+    rowsByTable.set('task_conditions', [
+      {
+        id: 'condition-material-1',
+        task_id: 'task-1',
+        condition_type: 'material',
+        source_type: 'project_material',
+        source_ref_id: 'material-condition',
+      },
+      {
+        id: 'condition-drawing-1',
+        task_id: 'task-1',
+        condition_type: 'drawing',
+        source_type: 'drawing_package',
+        source_ref_id: 'drawing-1',
+      },
+    ])
+    rowsByTable.set('project_materials', [
+      { id: 'material-explicit' },
+      { id: 'material-condition' },
+    ])
 
+    const rows = await readDurationContextTaskReadinessRows({
+      taskId: 'task-1',
+      explicitMaterialIds: ['material-explicit'],
+    })
+
+    expect(rows.materials).toEqual([
+      { id: 'material-explicit' },
+      { id: 'material-condition' },
+    ])
+    expect(calls.filter((call) => call.table === 'project_materials')).toHaveLength(1)
+    expect(calls.find((call) => call.table === 'project_materials')?.in).toContainEqual([
+      'id',
+      ['material-explicit', 'material-condition'],
+    ])
+  })
+
+  it('selects only columns that exist in the deployed readiness schema', async () => {
+    await readDurationContextTaskReadinessRows({
+      taskId: 'task-schema-1',
+      explicitMaterialIds: ['material-1'],
+    })
+
+    const conditionSelect = calls.find((call) => call.table === 'task_conditions')?.select ?? ''
+    const obstacleSelect = calls.find((call) => call.table === 'task_obstacles')?.select ?? ''
+    const materialSelect = calls.find((call) => call.table === 'project_materials')?.select ?? ''
+
+    expect(conditionSelect).not.toMatch(/(?:^|, )title(?:,|$)/)
+    expect(conditionSelect).not.toMatch(/planned_date|expected_date|due_date/)
+    expect(obstacleSelect).not.toMatch(/(?:^|, )title(?:,|$)/)
+    expect(obstacleSelect).not.toContain('source_entity_type')
+    expect(materialSelect).not.toContain('linked_task_id')
+  })
+
+  it('resolves resource material rows through task condition material references', async () => {
+    rowsByTable.set('task_conditions', [
+      { task_id: 'task-1', condition_type: 'material', source_ref_id: 'material-1' },
+      { task_id: 'task-2', condition_type: 'material', source_entity_type: 'project_material', source_entity_id: 'material-2' },
+    ])
+    rowsByTable.set('project_materials', [{ id: 'material-1' }, { id: 'material-2' }])
+
+    const rows = await readDurationContextResourceReadinessRows({
+      projectId: 'project-1',
+      taskIds: ['task-1', 'task-2'],
+    })
+
+    expect(rows.materials).toEqual([
+      { id: 'material-1', linked_task_id: 'task-1' },
+      { id: 'material-2', linked_task_id: 'task-2' },
+    ])
+    expect(calls.find((call) => call.table === 'project_materials')?.in).toContainEqual(['id', ['material-1', 'material-2']])
+  })
+
+  it('fails closed without querying materials when no explicit material ids exist', async () => {
     const rows = await readDurationContextTaskMaterialRows({ taskId: 'task-2' })
 
-    expect(rows).toEqual([{ id: 'material-linked' }])
-    expect(calls).toHaveLength(1)
-    expect(calls[0]).toEqual(expect.objectContaining({
-      table: 'project_materials',
-      eq: [['linked_task_id', 'task-2']],
-      in: [],
-    }))
+    expect(rows).toEqual([])
+    expect(calls).toHaveLength(0)
   })
 
   it('can read only task readiness signal rows without material fallback queries', async () => {
@@ -159,10 +226,9 @@ describe('durationContextFactReadModelService', () => {
     expect(calls.map((call) => call.table)).toEqual(['task_conditions', 'task_obstacles'])
   })
 
-  it('reads resource readiness rows for a project task set', async () => {
+  it('does not infer material links when task conditions have no material reference', async () => {
     rowsByTable.set('task_conditions', [{ task_id: 'task-1' }])
     rowsByTable.set('task_obstacles', [{ task_id: 'task-2' }])
-    rowsByTable.set('project_materials', [{ linked_task_id: 'task-1' }])
 
     const rows = await readDurationContextResourceReadinessRows({
       projectId: 'project-1',
@@ -171,10 +237,10 @@ describe('durationContextFactReadModelService', () => {
 
     expect(rows.conditions).toEqual([{ task_id: 'task-1' }])
     expect(rows.obstacles).toEqual([{ task_id: 'task-2' }])
-    expect(rows.materials).toEqual([{ linked_task_id: 'task-1' }])
+    expect(rows.materials).toEqual([])
     expect(calls[0].eq).toContainEqual(['project_id', 'project-1'])
     expect(calls[0].in).toContainEqual(['task_id', ['task-1', 'task-2']])
-    expect(calls[2].in).toContainEqual(['linked_task_id', ['task-1', 'task-2']])
+    expect(calls.map((call) => call.table)).toEqual(['task_conditions', 'task_obstacles'])
   })
 
   it('reads task progress snapshots with ordering and caller-selected fields', async () => {

@@ -29,6 +29,9 @@ export type DurationContextSingleRowResult = {
 const TASK_CONTEXT_SELECT = 'id, project_id, title, planned_start_date, planned_end_date, start_date, end_date, actual_start_date, actual_end_date, progress, planned_quantity, completed_quantity, quantity_unit, template_node_id, engineering_category_id, wbs_node_type, standard_work_code, standard_work_name, building_object_id, basement_object_id, floor_object_id, physical_zone_object_id, functional_area_object_id, participant_unit_id, acceptance_required, material_required, standard_task_metadata'
 const RESPONSIBLE_UNIT_HISTORY_TASK_SELECT = 'id, planned_start_date, planned_end_date, start_date, end_date, actual_start_date, actual_end_date'
 const RESOURCE_CONFLICT_TASK_SELECT = 'id, building_object_id, floor_object_id, physical_zone_object_id, functional_area_object_id, participant_unit_id, planned_start_date, planned_end_date, start_date, end_date, actual_start_date, actual_end_date, progress, status, title, standard_work_name, standard_work_code, standard_task_metadata'
+const TASK_CONDITION_READINESS_SELECT = 'id, task_id, status, is_satisfied, condition_type, blocking_level, required_for_start, source_type, source_ref_id, source_entity_type, source_entity_id, target_date, created_at, name, description, drawing_package_id, drawing_package_code, participant_unit_id'
+const TASK_OBSTACLE_READINESS_SELECT = 'id, task_id, status, obstacle_type, blocking_level, impact_level, progress_impact_level, severity, estimated_resolve_date, created_at, description, source_type, source_ref_id'
+const PROJECT_MATERIAL_READINESS_SELECT = 'id, expected_arrival_date, actual_arrival_date, record_status, lifecycle_status'
 
 function emptyReadinessRows(): DurationContextReadinessRows {
   return { conditions: [], obstacles: [], materials: [] }
@@ -46,6 +49,49 @@ function uniqueIds(values: unknown[]) {
 function dataRows(result: unknown): Record<string, unknown>[] {
   const data = (result as { data?: unknown } | null | undefined)?.data
   return Array.isArray(data) ? data as Record<string, unknown>[] : []
+}
+
+function normalizeReferenceType(value: unknown) {
+  return String(value ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_')
+}
+
+function readMaterialConditionReference(row: Record<string, unknown>) {
+  const referenceTypes = [
+    row.condition_type,
+    row.source_type,
+    row.source_entity_type,
+  ].map(normalizeReferenceType)
+  const isMaterial = referenceTypes.some((value) => (
+    value === 'material'
+    || value === 'project_material'
+    || value === 'project_materials'
+    || value === '\u6750\u6599'
+  ))
+  if (!isMaterial) return null
+  return normalizeId(row.source_ref_id) ?? normalizeId(row.source_entity_id)
+}
+
+function projectMaterialsToTaskReferences(
+  conditions: Record<string, unknown>[],
+  materials: Record<string, unknown>[],
+) {
+  const materialById = new Map(materials
+    .map((row) => [normalizeId(row.id), row] as const)
+    .filter((entry): entry is readonly [string, Record<string, unknown>] => Boolean(entry[0])))
+  const seen = new Set<string>()
+  const projected: Record<string, unknown>[] = []
+  for (const condition of conditions) {
+    const taskId = normalizeId(condition.task_id)
+    const materialId = readMaterialConditionReference(condition)
+    if (!taskId || !materialId) continue
+    const material = materialById.get(materialId)
+    if (!material) continue
+    const key = `${taskId}|${materialId}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    projected.push({ ...material, linked_task_id: taskId })
+  }
+  return projected
 }
 
 async function readOrEmpty(query: PromiseLike<unknown>): Promise<Record<string, unknown>[]> {
@@ -76,28 +122,29 @@ export async function readDurationContextTaskReadinessRows(params: {
   const taskId = normalizeId(params.taskId)
   if (!taskId) return emptyReadinessRows()
 
-  const materialIds = uniqueIds(params.explicitMaterialIds ?? [])
-  const [conditions, obstacles, materials] = await Promise.all([
+  const [conditions, obstacles] = await Promise.all([
     readOrEmpty(
       durationContextFactTable('task_conditions')
-        .select('id, status, is_satisfied, condition_type, blocking_level, required_for_start, source_type, source_ref_id, source_entity_type, source_entity_id, target_date, created_at, title, description')
+        .select(TASK_CONDITION_READINESS_SELECT)
         .eq('task_id', taskId),
     ),
     readOrEmpty(
       durationContextFactTable('task_obstacles')
-        .select('id, status, obstacle_type, blocking_level, impact_level, progress_impact_level, severity, estimated_resolve_date, created_at, title, description')
+        .select(TASK_OBSTACLE_READINESS_SELECT)
         .eq('task_id', taskId),
     ),
-    readOrEmpty(
-      materialIds.length > 0
-        ? durationContextFactTable('project_materials')
-          .select('id, linked_task_id, expected_arrival_date, actual_arrival_date, record_status, lifecycle_status')
-          .in('id', materialIds)
-        : durationContextFactTable('project_materials')
-          .select('id, linked_task_id, expected_arrival_date, actual_arrival_date, record_status, lifecycle_status')
-          .eq('linked_task_id', taskId),
-    ),
   ])
+  const materialIds = uniqueIds([
+    ...(params.explicitMaterialIds ?? []),
+    ...conditions.map(readMaterialConditionReference),
+  ])
+  const materials = materialIds.length > 0
+    ? await readOrEmpty(
+        durationContextFactTable('project_materials')
+          .select(PROJECT_MATERIAL_READINESS_SELECT)
+          .in('id', materialIds),
+      )
+    : []
 
   return { conditions, obstacles, materials }
 }
@@ -111,12 +158,12 @@ export async function readDurationContextTaskReadinessSignalRows(params: {
   const [conditions, obstacles] = await Promise.all([
     readOrEmpty(
       durationContextFactTable('task_conditions')
-        .select('id, status, is_satisfied, condition_type, blocking_level, required_for_start, source_type, source_ref_id, source_entity_type, source_entity_id, target_date, created_at, title, description')
+        .select(TASK_CONDITION_READINESS_SELECT)
         .eq('task_id', taskId),
     ),
     readOrEmpty(
       durationContextFactTable('task_obstacles')
-        .select('id, status, obstacle_type, blocking_level, impact_level, progress_impact_level, severity, estimated_resolve_date, created_at, title, description')
+        .select(TASK_OBSTACLE_READINESS_SELECT)
         .eq('task_id', taskId),
     ),
   ])
@@ -132,14 +179,11 @@ export async function readDurationContextTaskMaterialRows(params: {
   if (!taskId) return []
 
   const materialIds = uniqueIds(params.explicitMaterialIds ?? [])
+  if (materialIds.length === 0) return []
   return readOrEmpty(
-    materialIds.length > 0
-      ? durationContextFactTable('project_materials')
-        .select('id, linked_task_id, expected_arrival_date, actual_arrival_date, record_status, lifecycle_status')
-        .in('id', materialIds)
-      : durationContextFactTable('project_materials')
-        .select('id, linked_task_id, expected_arrival_date, actual_arrival_date, record_status, lifecycle_status')
-        .eq('linked_task_id', taskId),
+    durationContextFactTable('project_materials')
+      .select(PROJECT_MATERIAL_READINESS_SELECT)
+      .in('id', materialIds),
   )
 }
 
@@ -151,26 +195,30 @@ export async function readDurationContextResourceReadinessRows(params: {
   const taskIds = uniqueIds(params.taskIds)
   if (!projectId || taskIds.length === 0) return emptyReadinessRows()
 
-  const [conditions, obstacles, materials] = await Promise.all([
+  const [conditions, obstacles] = await Promise.all([
     readOrEmpty(
       durationContextFactTable('task_conditions')
-        .select('id, task_id, condition_type, status, is_satisfied, target_date, created_at')
+        .select(TASK_CONDITION_READINESS_SELECT)
         .eq('project_id', projectId)
         .in('task_id', taskIds),
     ),
     readOrEmpty(
       durationContextFactTable('task_obstacles')
-        .select('id, task_id, obstacle_type, status, severity, estimated_resolve_date, created_at')
+        .select(TASK_OBSTACLE_READINESS_SELECT)
         .eq('project_id', projectId)
         .in('task_id', taskIds),
     ),
-    readOrEmpty(
-      durationContextFactTable('project_materials')
-        .select('id, linked_task_id, expected_arrival_date, actual_arrival_date, record_status, lifecycle_status')
-        .eq('project_id', projectId)
-        .in('linked_task_id', taskIds),
-    ),
   ])
+  const materialIds = uniqueIds(conditions.map(readMaterialConditionReference))
+  const materialRows = materialIds.length > 0
+    ? await readOrEmpty(
+        durationContextFactTable('project_materials')
+          .select(PROJECT_MATERIAL_READINESS_SELECT)
+          .eq('project_id', projectId)
+          .in('id', materialIds),
+      )
+    : []
+  const materials = projectMaterialsToTaskReferences(conditions, materialRows)
 
   return { conditions, obstacles, materials }
 }

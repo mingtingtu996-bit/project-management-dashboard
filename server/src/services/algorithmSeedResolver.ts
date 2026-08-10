@@ -347,12 +347,29 @@ async function withAlgorithmSeedResolverReadBudget<T>(
   )
   if (timeoutMs <= 0) return Promise.resolve(promiseLike)
 
+  const controller = new AbortController()
+  const abortable = promiseLike as PromiseLike<T> & {
+    abortSignal?: (signal: AbortSignal) => PromiseLike<T>
+  }
   let timeout: ReturnType<typeof setTimeout> | null = null
+  let timedOut = false
+  const request = typeof abortable.abortSignal === 'function'
+    ? abortable.abortSignal(controller.signal)
+    : abortable
+  const observedRequest = Promise.resolve(request).then(
+    (value) => value,
+    (error) => {
+      if (!timedOut) throw error
+      return new Promise<T>(() => {})
+    },
+  )
   try {
     return await Promise.race([
-      Promise.resolve(promiseLike),
+      observedRequest,
       new Promise<T>((_resolve, reject) => {
         timeout = setTimeout(() => {
+          timedOut = true
+          controller.abort()
           reject(new AlgorithmSeedResolverReadTimeoutError(operation, timeoutMs))
         }, timeoutMs)
       }),
@@ -763,10 +780,6 @@ async function loadActiveSystemRecords<T extends AlgorithmSeedRecordPayload>(
   seedType: AlgorithmSeedType,
   lookupStableCodes: string[] = [],
 ) {
-  if (lookupStableCodes.length === 0) {
-    return loadActiveSystemRecordsUncached<T>(seedType, lookupStableCodes)
-  }
-
   const key = buildActiveSystemSeedRecordCacheKey(seedType, lookupStableCodes)
   const now = Date.now()
   const cached = activeSystemSeedRecordCache.get(key)

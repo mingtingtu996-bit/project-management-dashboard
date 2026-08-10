@@ -15,9 +15,8 @@ import {
   type WorkEnvironment,
 } from './algorithmSeedResolver.js'
 import {
-  readDurationContextTaskMaterialRows,
   readDurationContextTaskProgressSnapshotRows,
-  readDurationContextTaskReadinessSignalRows,
+  readDurationContextTaskReadinessRows,
 } from './durationContextFactReadModelService.js'
 import { loadPublishedProjectProductivityCalibration } from './projectProductivityCalibrationStore.js'
 import type {
@@ -606,7 +605,7 @@ export async function loadActiveReadinessRows(input: DurationContextInput, runti
     return promise
   }
 
-  const rawReadinessRows = await readDurationContextTaskReadinessSignalRows({ taskId })
+  const rawReadinessRows = await readDurationContextTaskReadinessRows({ taskId })
   const conditions = rawReadinessRows.conditions.filter(isOpenCondition)
   const obstacles = rawReadinessRows.obstacles.filter(isOpenObstacle)
 
@@ -620,10 +619,13 @@ export async function loadActiveReadinessRows(input: DurationContextInput, runti
     ]
   }))
 
-  const materialRows = await readDurationContextTaskMaterialRows({ taskId, explicitMaterialIds })
-  const materials = materialRows.filter(isActiveMaterial).map((row: Record<string, unknown>) => ({
+  const explicitMaterialIdSet = new Set(explicitMaterialIds)
+  const materials = rawReadinessRows.materials
+    .filter((row) => explicitMaterialIdSet.has(normalizeId(row.id) ?? ''))
+    .filter(isActiveMaterial)
+    .map((row: Record<string, unknown>) => ({
     ...row,
-    __linkage_quality: explicitMaterialIds.length > 0 ? 'explicit_condition' : 'linked_task_fallback',
+    __linkage_quality: 'explicit_condition',
   }))
 
   return {

@@ -5,6 +5,8 @@ const state = vi.hoisted(() => ({
   stableCodeLookups: [] as string[][],
   systemRecordReadCount: 0,
   tableReadCount: 0,
+  abortSignalTables: [] as string[],
+  abortedTables: [] as string[],
 }))
 
 vi.mock('../auth/access.js', () => ({
@@ -25,12 +27,19 @@ vi.mock('../services/dbService.js', () => {
   class QueryBuilder {
     private readonly table: string
     private readonly filters: Array<{ column: string; value: unknown }> = []
+    private abortSignalValue: AbortSignal | null = null
 
     constructor(table: string) {
       this.table = table
     }
 
     select() {
+      return this
+    }
+
+    abortSignal(signal: AbortSignal) {
+      state.abortSignalTables.push(this.table)
+      this.abortSignalValue = signal
       return this
     }
 
@@ -46,16 +55,29 @@ vi.mock('../services/dbService.js', () => {
     }
 
     maybeSingle() {
-      if (this.table === 'algorithm_seed_versions' && state.versionQueryMode === 'pending') {
-        return new Promise(() => {})
-      }
-      if (this.table === 'algorithm_seed_versions' && state.versionQueryMode === 'active') {
-        return Promise.resolve({ data: { id: 'active-seed-version' }, error: null })
-      }
-      return Promise.resolve({ data: null, error: null })
+      return this
     }
 
     then(resolve: (value: any) => unknown, reject?: (reason: unknown) => unknown) {
+      if (this.table === 'algorithm_seed_versions' && state.versionQueryMode === 'pending') {
+        const pending = new Promise((_, rejectPromise) => {
+          const signal = this.abortSignalValue
+          if (!signal) return
+          const rejectOnAbort = () => {
+            state.abortedTables.push(this.table)
+            rejectPromise(new Error('query aborted'))
+          }
+          if (signal.aborted) rejectOnAbort()
+          else signal.addEventListener('abort', rejectOnAbort, { once: true })
+        })
+        return pending.then(resolve, reject)
+      }
+      if (this.table === 'algorithm_seed_versions' && state.versionQueryMode === 'active') {
+        return Promise.resolve({ data: { id: 'active-seed-version' }, error: null }).then(resolve, reject)
+      }
+      if (this.table === 'algorithm_seed_versions') {
+        return Promise.resolve({ data: null, error: null }).then(resolve, reject)
+      }
       if (this.table === 'algorithm_seed_records' && state.versionQueryMode === 'active') {
         state.systemRecordReadCount += 1
         const stableCodeFilter = this.filters.find((filter) => filter.column === 'stable_code')
@@ -107,6 +129,8 @@ describe('algorithmSeedResolver fast fallback', () => {
     state.stableCodeLookups = []
     state.systemRecordReadCount = 0
     state.tableReadCount = 0
+    state.abortSignalTables = []
+    state.abortedTables = []
     process.env.ALGORITHM_SEED_RESOLVER_READ_TIMEOUT_MS = '5'
   })
 
@@ -132,6 +156,14 @@ describe('algorithmSeedResolver fast fallback', () => {
     expect((result as Awaited<ReturnType<typeof resolveAlgorithmSeedRecordsWithDiagnostics>>).records.every((record) => (
       record.__resolverSource === 'ts_seed_fallback'
     ))).toBe(true)
+  })
+
+  it('aborts the governed query when the resolver read budget expires', async () => {
+    const result = await resolveAlgorithmSeedRecordsWithDiagnostics('standard_work_duration', {})
+
+    expect(result.diagnostics.fallbackUsed).toBe(true)
+    expect(state.abortSignalTables).toContain('algorithm_seed_versions')
+    expect(state.abortedTables).toContain('algorithm_seed_versions')
   })
 
   it('uses built-in cold-start assets without opening a governed database read for offline quality review', async () => {
@@ -194,6 +226,22 @@ describe('algorithmSeedResolver fast fallback', () => {
 
     expect(first?.__resolverSource).toBe('active_seed')
     expect(second?.__resolverSource).toBe('active_seed')
+    expect(state.systemRecordReadCount).toBe(1)
+  })
+
+  it('reuses the full active system seed read when contexts have no stable-code filter', async () => {
+    state.versionQueryMode = 'active'
+    process.env.ALGORITHM_SEED_RESOLVER_READ_TIMEOUT_MS = '25'
+
+    await resolveAlgorithmSeedRecordsWithDiagnostics('standard_work_duration', {
+      projectId: '11111111-1111-4111-8111-111111111111',
+      companyId: '22222222-2222-4222-8222-222222222222',
+    })
+    await resolveAlgorithmSeedRecordsWithDiagnostics('standard_work_duration', {
+      projectId: '33333333-3333-4333-8333-333333333333',
+      companyId: '44444444-4444-4444-8444-444444444444',
+    })
+
     expect(state.systemRecordReadCount).toBe(1)
   })
 })

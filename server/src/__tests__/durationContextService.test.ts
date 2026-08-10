@@ -1503,6 +1503,17 @@ describe('durationContextService resource pressure', () => {
       is_satisfied: false,
       target_date: '2026-04-01',
       created_at: '2026-04-01T00:00:00.000Z',
+    }, {
+      id: 'condition-material-1',
+      project_id: 'project-1',
+      task_id: 'task-1',
+      condition_type: 'project_material',
+      source_type: 'project_material',
+      source_ref_id: 'material-1',
+      status: 'pending',
+      is_satisfied: false,
+      required_for_start: false,
+      blocking_level: 'soft',
     }]
     mocks.state.obstacles = [{
       id: 'obstacle-1',
@@ -1511,13 +1522,12 @@ describe('durationContextService resource pressure', () => {
       obstacle_type: 'equipment',
       status: 'open',
       severity: 'high',
-      expected_resolution_date: '2026-04-03',
+      estimated_resolve_date: '2026-04-03',
       created_at: '2026-04-02T00:00:00.000Z',
     }]
     mocks.state.materials = [{
       id: 'material-1',
       project_id: 'project-1',
-      linked_task_id: 'task-1',
       expected_arrival_date: '2026-04-05',
       actual_arrival_date: null,
       record_status: 'active',
@@ -1975,6 +1985,30 @@ describe('durationContextService resource pressure', () => {
         target_date: '2026-05-06',
         created_at: '2026-05-06T00:00:00.000Z',
       },
+      {
+        id: 'condition-material-board',
+        project_id: 'project-1',
+        task_id: 'task-current',
+        condition_type: 'project_material',
+        source_type: 'project_material',
+        source_ref_id: 'material-board',
+        status: 'pending',
+        is_satisfied: false,
+        required_for_start: false,
+        blocking_level: 'soft',
+      },
+      {
+        id: 'condition-material-tile',
+        project_id: 'project-1',
+        task_id: 'task-tile',
+        condition_type: 'project_material',
+        source_type: 'project_material',
+        source_ref_id: 'material-tile',
+        status: 'pending',
+        is_satisfied: false,
+        required_for_start: false,
+        blocking_level: 'soft',
+      },
     ]
     mocks.state.obstacles = [
       {
@@ -1984,7 +2018,7 @@ describe('durationContextService resource pressure', () => {
         obstacle_type: 'personnel',
         status: 'open',
         severity: 'high',
-        expected_resolution_date: '2026-05-07',
+        estimated_resolve_date: '2026-05-07',
         created_at: '2026-05-07T00:00:00.000Z',
       },
       {
@@ -1994,7 +2028,7 @@ describe('durationContextService resource pressure', () => {
         obstacle_type: 'equipment',
         status: 'resolving',
         severity: 'critical',
-        expected_resolution_date: '2026-05-08',
+        estimated_resolve_date: '2026-05-08',
         created_at: '2026-05-08T00:00:00.000Z',
       },
     ]
@@ -2002,7 +2036,6 @@ describe('durationContextService resource pressure', () => {
       {
         id: 'material-board',
         project_id: 'project-1',
-        linked_task_id: 'task-current',
         expected_arrival_date: '2026-05-09',
         actual_arrival_date: null,
         record_status: 'active',
@@ -2011,7 +2044,6 @@ describe('durationContextService resource pressure', () => {
       {
         id: 'material-tile',
         project_id: 'project-1',
-        linked_task_id: 'task-tile',
         expected_arrival_date: '2026-05-10',
         actual_arrival_date: null,
         record_status: 'active',
@@ -3066,17 +3098,39 @@ describe('durationContextService resource pressure', () => {
       progress: 0,
       status: 'todo',
     }]
+    mocks.state.conditions = [
+      {
+        id: 'condition-material-dated',
+        task_id: 'task-material-wait',
+        condition_type: 'project_material',
+        source_type: 'project_material',
+        source_ref_id: 'material-dated',
+        status: 'pending',
+        is_satisfied: false,
+        required_for_start: false,
+        blocking_level: 'soft',
+      },
+      {
+        id: 'condition-material-undated',
+        task_id: 'task-material-wait',
+        condition_type: 'project_material',
+        source_type: 'project_material',
+        source_ref_id: 'material-undated',
+        status: 'pending',
+        is_satisfied: false,
+        required_for_start: false,
+        blocking_level: 'soft',
+      },
+    ]
     mocks.state.materials = [
       {
         id: 'material-dated',
-        linked_task_id: 'task-material-wait',
         expected_arrival_date: '2026-05-25',
         actual_arrival_date: null,
         record_status: 'active',
       },
       {
         id: 'material-undated',
-        linked_task_id: 'task-material-wait',
         expected_arrival_date: null,
         actual_arrival_date: null,
         record_status: 'active',
@@ -3139,6 +3193,17 @@ describe('durationContextService resource pressure', () => {
         required_for_start: true,
         title: 'crew readiness',
       },
+      {
+        id: 'condition-material-delay',
+        task_id: 'task-readiness-severe',
+        status: 'pending',
+        is_satisfied: false,
+        blocking_level: 'soft',
+        required_for_start: false,
+        condition_type: 'project_material',
+        source_type: 'project_material',
+        source_ref_id: 'material-delay',
+      },
     ]
     mocks.state.obstacles = [{
       id: 'obstacle-severe',
@@ -3150,7 +3215,6 @@ describe('durationContextService resource pressure', () => {
     }]
     mocks.state.materials = [{
       id: 'material-delay',
-      linked_task_id: 'task-readiness-severe',
       expected_arrival_date: '2026-05-22',
       actual_arrival_date: null,
       record_status: 'active',
@@ -5307,7 +5371,8 @@ describe('durationContextService resource pressure', () => {
         project_id: 'project-extra-days-cap',
         task_id: 'task-extra-days-cap',
         condition_type: 'material',
-        source_type: 'material',
+        source_type: 'project_material',
+        source_ref_id: 'material-delay',
         required_for_start: true,
         blocking_level: 'hard',
         status: 'pending',
@@ -5318,7 +5383,6 @@ describe('durationContextService resource pressure', () => {
       mocks.state.materials = [{
         id: 'material-delay',
         project_id: 'project-extra-days-cap',
-        linked_task_id: 'task-extra-days-cap',
         expected_arrival_date: '2026-05-30',
         actual_arrival_date: null,
         record_status: 'active',
@@ -5379,10 +5443,21 @@ describe('durationContextService resource pressure', () => {
         progress: 92,
         status: 'in_progress',
       }]
+      mocks.state.conditions = [{
+        id: 'condition-material-late',
+        project_id: 'project-progress-external-extra',
+        task_id: 'task-progress-external-extra',
+        condition_type: 'project_material',
+        source_type: 'project_material',
+        source_ref_id: 'material-late',
+        status: 'pending',
+        is_satisfied: false,
+        required_for_start: false,
+        blocking_level: 'soft',
+      }]
       mocks.state.materials = [{
         id: 'material-late',
         project_id: 'project-progress-external-extra',
-        linked_task_id: 'task-progress-external-extra',
         expected_arrival_date: '2026-05-25',
         actual_arrival_date: null,
         record_status: 'active',
@@ -5424,10 +5499,21 @@ describe('durationContextService resource pressure', () => {
         progress: 0,
         status: 'todo',
       }]
+      mocks.state.conditions = [{
+        id: 'condition-material-far',
+        project_id: 'project-material-unit-mix',
+        task_id: 'task-material-unit-mix',
+        condition_type: 'project_material',
+        source_type: 'project_material',
+        source_ref_id: 'material-far',
+        status: 'pending',
+        is_satisfied: false,
+        required_for_start: false,
+        blocking_level: 'soft',
+      }]
       mocks.state.materials = [{
         id: 'material-far',
         project_id: 'project-material-unit-mix',
-        linked_task_id: 'task-material-unit-mix',
         expected_arrival_date: '2026-05-31',
         actual_arrival_date: null,
         record_status: 'active',
@@ -6668,6 +6754,17 @@ describe('durationContextService resource pressure', () => {
         status: 'pending',
         is_satisfied: false,
         target_date: '2026-05-20',
+      }, {
+        id: 'condition-cache-material',
+        project_id: 'project-cache',
+        task_id: 'task-cache',
+        condition_type: 'project_material',
+        source_type: 'project_material',
+        source_ref_id: 'material-cache',
+        required_for_start: false,
+        blocking_level: 'soft',
+        status: 'pending',
+        is_satisfied: false,
       }]
       mocks.state.obstacles = [{
         id: 'obstacle-cache',
@@ -6676,7 +6773,14 @@ describe('durationContextService resource pressure', () => {
         obstacle_type: 'equipment',
         status: 'open',
         severity: 'high',
-        expected_resolution_date: '2026-05-25',
+        estimated_resolve_date: '2026-05-25',
+      }]
+      mocks.state.materials = [{
+        id: 'material-cache',
+        project_id: 'project-cache',
+        expected_arrival_date: '2026-05-01',
+        actual_arrival_date: '2026-05-01',
+        record_status: 'active',
       }]
       mocks.state.progressSnapshots = [
         { task_id: 'task-cache', progress: 2, snapshot_date: '2026-05-02', created_at: '2026-05-02T08:00:00Z' },
