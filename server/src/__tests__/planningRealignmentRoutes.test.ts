@@ -1407,6 +1407,12 @@ describe('planning realignment routes', () => {
     expect(state.tables.task_baseline_items.filter((row) => row.baseline_version_id === 'baseline-draft')).toHaveLength(2)
     expect(state.tables.task_baselines.find((row) => row.id === 'baseline-draft')?.title).toBe('baseline draft saved')
     expect(state.getClient).toHaveBeenCalledTimes(1)
+    expect(state.insertRowsReturning).toHaveBeenCalledWith(
+      expect.anything(),
+      'task_baseline_items',
+      expect.any(Array),
+      expect.objectContaining({ maxRowsPerQuery: 10 }),
+    )
     expect(state.clientQuery).toHaveBeenCalledWith(
       expect.stringMatching(/UPDATE public\.task_baselines[\s\S]+WHERE id = \$1[\s\S]+project_id = \$2/i),
       expect.arrayContaining(['baseline-draft', 'project-1']),

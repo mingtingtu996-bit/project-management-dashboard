@@ -61,4 +61,38 @@ describe('transaction insert service', () => {
       '[{"seed_version_id":"seed-1","source":"calendar"}]',
     ])
   })
+
+  it('batches returning inserts while preserving row order', async () => {
+    const client = {
+      query: vi.fn(async (_sql: string, values: unknown[]) => ({
+        rows: values
+          .filter((_value, index) => index % 2 === 0)
+          .map((id) => ({ id })),
+      })),
+    }
+
+    const inserted = await insertRowsReturning<{ id: string }>(client, 'task_baseline_items', [
+      { id: 'item-1', project_id: 'project-1' },
+      { id: 'item-2', project_id: 'project-1' },
+      { id: 'item-3', project_id: 'project-1' },
+      { id: 'item-4', project_id: 'project-1' },
+      { id: 'item-5', project_id: 'project-1' },
+    ], {
+      maxRowsPerQuery: 2,
+    })
+
+    expect(client.query).toHaveBeenCalledTimes(3)
+    expect(client.query.mock.calls.map((call) => call[1])).toEqual([
+      ['item-1', 'project-1', 'item-2', 'project-1'],
+      ['item-3', 'project-1', 'item-4', 'project-1'],
+      ['item-5', 'project-1'],
+    ])
+    expect(inserted.map((row) => row.id)).toEqual([
+      'item-1',
+      'item-2',
+      'item-3',
+      'item-4',
+      'item-5',
+    ])
+  })
 })
