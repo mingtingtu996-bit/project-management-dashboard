@@ -175,12 +175,19 @@ test('wizard baseline revision staging smoke can attest an exact deployed stagin
   assert.match(smokeSource, /preallocated_project_id_readback_after_uncertain_create_response/)
   assert.match(smokeSource, /cleanup refused because the project diagnostic identity does not match/)
   assert.match(smokeSource, /WORKBUDDY_DIAGNOSTIC_CLEANUP_DATABASE_URL/)
+  assert.match(smokeSource, /WORKBUDDY_DIAGNOSTIC_CLEANUP_TLS_CA_CERT/)
   assert.match(smokeSource, /cleanupWizardDiagnosticProject/)
   assert.match(smokeSource, /writeResultReport\(\)/)
   assert.match(
     deployWorkflowSource,
     /WORKBUDDY_DIAGNOSTIC_CLEANUP_DATABASE_URL: \$\{\{ secrets\.STAGING_SUPABASE_MIGRATION_URL \}\}/,
   )
+  assert.match(
+    deployWorkflowSource,
+    /WORKBUDDY_DIAGNOSTIC_CLEANUP_TLS_CA_CERT: \$\{\{ secrets\.STAGING_SUPABASE_TLS_CA_CERT \}\}/,
+  )
+  assert.match(deployWorkflowSource, /Verify authenticated staging cleanup TLS/)
+  assert.match(deployWorkflowSource, /verify-wizard-diagnostic-cleanup-connection\.mjs/)
   assert.match(
     productionLivegateSource,
     /WORKBUDDY_DIAGNOSTIC_CLEANUP_DATABASE_URL: \$\{\{ secrets\.PRODUCTION_SUPABASE_MIGRATION_URL \}\}/,
@@ -192,9 +199,7 @@ test('deployed wizard cleanup requires migration-backed physical deletion readba
     'const directCleanup = await runMigrationBackedCleanup()',
   )
   const finalReadbackIndex = smokeSource.indexOf("const finalCleanupRead = await apiRequest('GET', `/api/projects/${targetProjectId}`)")
-  const apiDeleteIndex = smokeSource.indexOf(
-    "let deleteCall = await apiRequest(\n      'DELETE',",
-  )
+  const apiDeleteIndex = smokeSource.indexOf('let deleteCall = await apiRequest(')
   const migrationCleanupBranch = smokeSource.slice(directCleanupIndex, apiDeleteIndex)
 
   assert.ok(directCleanupIndex >= 0, 'expected migration-backed cleanup')
@@ -222,6 +227,12 @@ test('staging can clean an explicitly approved prior wizard smoke artifact witho
   assert.match(stagingDiagnosticCleanupWorkflowSource, /CLEANUP_DISPOSABLE_STAGING_WIZARD_RESIDUE/)
   assert.match(stagingDiagnosticCleanupWorkflowSource, /environment: staging/)
   assert.match(stagingDiagnosticCleanupWorkflowSource, /group: lighthouse-host-runtime-mutation/)
+  assert.match(
+    stagingDiagnosticCleanupWorkflowSource,
+    /WORKBUDDY_DIAGNOSTIC_CLEANUP_TLS_CA_CERT: \$\{\{ secrets\.STAGING_SUPABASE_TLS_CA_CERT \}\}/,
+  )
+  assert.match(stagingDiagnosticCleanupWorkflowSource, /Verify authenticated staging cleanup TLS/)
+  assert.match(stagingDiagnosticCleanupWorkflowSource, /verify-wizard-diagnostic-cleanup-connection\.mjs/)
   assert.match(stagingDiagnosticCleanupWorkflowSource, /actions\/download-artifact@v7[\s\S]+run-id: \$\{\{ inputs\.source_run_id \}\}/)
   assert.match(stagingDiagnosticCleanupWorkflowSource, /--cleanup-report "\$source_smoke_report"/)
   assert.match(stagingDiagnosticCleanupWorkflowSource, /staging-wizard-residual-cleanup\.json/)

@@ -71,6 +71,31 @@ function normalizeConnectionString(parsed) {
   return normalized.toString()
 }
 
+function validateCleanupConnection(input) {
+  const expectedProjectRef = requireText(input.expectedProjectRef, 'expected project ref').toLowerCase()
+  if (!/^[a-z0-9]{20}$/.test(expectedProjectRef)) {
+    throw new Error('expected project ref must be a 20-character Supabase project ref')
+  }
+
+  const connectionIdentity = parseConnectionIdentity(input.connectionString)
+  if (connectionIdentity.projectRef !== expectedProjectRef) {
+    throw new Error('diagnostic cleanup database project ref does not match the expected project ref')
+  }
+
+  const tlsCaCertificate = String(input.tlsCaCertificate ?? '').trim()
+  return {
+    connectionString: connectionIdentity.connectionString,
+    expectedProjectRef,
+    tlsCaCertificate: tlsCaCertificate || null,
+  }
+}
+
+function strictTlsOptions(tlsCaCertificate) {
+  return tlsCaCertificate
+    ? { rejectUnauthorized: true, ca: tlsCaCertificate }
+    : { rejectUnauthorized: true }
+}
+
 function parseMetadata(value) {
   if (value && typeof value === 'object' && !Array.isArray(value)) return value
   if (typeof value !== 'string' || !value.trim()) return {}
@@ -83,10 +108,8 @@ function parseMetadata(value) {
 }
 
 function validateInput(input) {
-  const expectedProjectRef = requireText(input.expectedProjectRef, 'expected project ref').toLowerCase()
-  if (!/^[a-z0-9]{20}$/.test(expectedProjectRef)) {
-    throw new Error('expected project ref must be a 20-character Supabase project ref')
-  }
+  const cleanupConnection = validateCleanupConnection(input)
+  const { expectedProjectRef } = cleanupConnection
 
   const projectId = requireText(input.projectId, 'project id')
   const companyId = requireText(input.companyId, 'company id')
@@ -124,14 +147,8 @@ function validateInput(input) {
     throw new Error('diagnostic cleanup run is outside the allowed cleanup window')
   }
 
-  const connectionIdentity = parseConnectionIdentity(input.connectionString)
-  if (connectionIdentity.projectRef !== expectedProjectRef) {
-    throw new Error('diagnostic cleanup database project ref does not match the expected project ref')
-  }
-
   return {
-    connectionString: connectionIdentity.connectionString,
-    expectedProjectRef,
+    ...cleanupConnection,
     projectId,
     companyId,
     targetEnvironment,
@@ -163,13 +180,35 @@ function assertPersistedDiagnosticIdentity(project, input) {
   }
 }
 
+export async function verifyWizardDiagnosticCleanupConnection(input, dependencies = {}) {
+  const validated = validateCleanupConnection(input)
+  const createClient = dependencies.createClient
+    ?? ((config) => new Client(config))
+  const client = createClient({
+    connectionString: validated.connectionString,
+    ssl: strictTlsOptions(validated.tlsCaCertificate),
+    application_name: 'workbuddy_wizard_diagnostic_cleanup_preflight',
+  })
+
+  try {
+    await client.connect()
+    await client.query('SELECT 1 AS cleanup_connection_ready')
+    return {
+      status: 'pass',
+      databaseProjectRefVerified: true,
+    }
+  } finally {
+    await client.end()
+  }
+}
+
 export async function cleanupWizardDiagnosticProject(input, dependencies = {}) {
   const validated = validateInput(input)
   const createClient = dependencies.createClient
     ?? ((config) => new Client(config))
   const client = createClient({
     connectionString: validated.connectionString,
-    ssl: { rejectUnauthorized: true },
+    ssl: strictTlsOptions(validated.tlsCaCertificate),
     application_name: 'workbuddy_wizard_diagnostic_cleanup',
   })
   let transactionStarted = false
