@@ -1520,6 +1520,24 @@ jobs:
         if: ${{ steps.deployment-eligibility.outputs.can_deploy == 'true' && env.DEPLOY_TARGET == 'staging' }}
         run: npm ci --workspaces=false --ignore-scripts --no-fund
 
+      - name: Verify authenticated staging cleanup TLS
+        if: ${{ steps.deployment-eligibility.outputs.can_deploy == 'true' && env.DEPLOY_TARGET == 'staging' }}
+        env:
+          STAGING_SMOKE_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+          WORKBUDDY_DIAGNOSTIC_CLEANUP_DATABASE_URL: ${{ secrets.STAGING_SUPABASE_MIGRATION_URL }}
+          WORKBUDDY_DIAGNOSTIC_CLEANUP_TLS_CA_CERT: ${{ secrets.STAGING_SUPABASE_TLS_CA_CERT }}
+        run: |
+          set -euo pipefail
+          for required_name in STAGING_SMOKE_SUPABASE_URL WORKBUDDY_DIAGNOSTIC_CLEANUP_DATABASE_URL WORKBUDDY_DIAGNOSTIC_CLEANUP_TLS_CA_CERT; do
+            if [ -z "${!required_name}" ]; then
+              echo "Missing required authenticated staging cleanup TLS value: $required_name" >&2
+              exit 1
+            fi
+          done
+          expected_project_ref="$(node -e "const value=new URL(process.env.STAGING_SMOKE_SUPABASE_URL).hostname.split('.')[0]; if(!/^[a-z0-9]{20}$/.test(value)) process.exit(1); process.stdout.write(value)")"
+          node scripts/verify-wizard-diagnostic-cleanup-connection.mjs \
+            --expected-project-ref "$expected_project_ref"
+
       - name: Run authenticated staging wizard and baseline smoke through SSH tunnel
         id: staging-smoke
         if: ${{ steps.deployment-eligibility.outputs.can_deploy == 'true' && env.DEPLOY_TARGET == 'staging' }}
@@ -1534,6 +1552,7 @@ jobs:
           STAGING_SMOKE_TEST_USER_EMAIL: ${{ secrets.STAGING_TEST_USER_EMAIL }}
           STAGING_SMOKE_TEST_USER_PASSWORD: ${{ secrets.STAGING_TEST_USER_PASSWORD }}
           WORKBUDDY_DIAGNOSTIC_CLEANUP_DATABASE_URL: ${{ secrets.STAGING_SUPABASE_MIGRATION_URL }}
+          WORKBUDDY_DIAGNOSTIC_CLEANUP_TLS_CA_CERT: ${{ secrets.STAGING_SUPABASE_TLS_CA_CERT }}
         run: |
           set -euo pipefail
           for required_name in DEPLOY_HEALTH_URL STAGING_SMOKE_SUPABASE_URL STAGING_SMOKE_TEST_USER_EMAIL STAGING_SMOKE_TEST_USER_PASSWORD WORKBUDDY_DIAGNOSTIC_CLEANUP_DATABASE_URL; do

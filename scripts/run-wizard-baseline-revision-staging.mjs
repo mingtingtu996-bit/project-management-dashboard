@@ -117,9 +117,15 @@ const expectedProjectRef = expectedProjectRefInput || supabaseProjectRef
 const diagnosticCleanupDatabaseUrl = String(
   process.env.WORKBUDDY_DIAGNOSTIC_CLEANUP_DATABASE_URL ?? '',
 ).trim()
+const diagnosticCleanupTlsCaCertificate = String(
+  process.env.WORKBUDDY_DIAGNOSTIC_CLEANUP_TLS_CA_CERT ?? '',
+).trim()
 const migrationBackedCleanupRequired = deployedStagingCode || productionLive
 if (migrationBackedCleanupRequired && !diagnosticCleanupDatabaseUrl) {
   throw new Error('deployed wizard cleanup requires WORKBUDDY_DIAGNOSTIC_CLEANUP_DATABASE_URL')
+}
+if (deployedStagingCode && !diagnosticCleanupTlsCaCertificate) {
+  throw new Error('deployed staging wizard cleanup requires WORKBUDDY_DIAGNOSTIC_CLEANUP_TLS_CA_CERT')
 }
 if ((productionLive || deployedStagingCode || expectedProjectRefInput)
   && !/^[a-z0-9]{20}$/.test(expectedProjectRef)) {
@@ -816,6 +822,7 @@ async function cleanupProject(targetProjectId = projectId) {
         projectName: result.projectName,
         releaseSha,
         actorUsername: testUsername,
+        tlsCaCertificate: diagnosticCleanupTlsCaCertificate || undefined,
       })
     }
     if (migrationBackedCleanupRequired) {

@@ -2,7 +2,10 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import pg from 'pg'
 
-import { cleanupWizardDiagnosticProject } from '../../scripts/wizard-diagnostic-project-cleanup.mjs'
+import {
+  cleanupWizardDiagnosticProject,
+  verifyWizardDiagnosticCleanupConnection,
+} from '../../scripts/wizard-diagnostic-project-cleanup.mjs'
 
 const projectRef = 'xemqmqpifsstkovbkatp'
 const projectId = '9e2e92b4-7662-4956-aeed-3725fc721164'
@@ -132,6 +135,40 @@ test('enforces TLS certificate verification even when the supplied URL requests 
   assert.equal(new URL(harness.clientConfigs[0]?.connectionString).searchParams.has('sslmode'), false)
   const effectiveClient = new pg.Client(harness.clientConfigs[0])
   assert.deepEqual(effectiveClient.connectionParameters.ssl, { rejectUnauthorized: true })
+})
+
+test('preflights the guarded cleanup connection with an explicitly trusted CA without weakening TLS verification', async () => {
+  const harness = buildHarness({}, { projectPresent: false })
+  const tlsCaCertificate = [
+    '-----BEGIN CERTIFICATE-----',
+    'test-supabase-root-ca',
+    '-----END CERTIFICATE-----',
+  ].join('\n')
+
+  const result = await verifyWizardDiagnosticCleanupConnection({
+    connectionString: `${connectionString}?sslmode=verify-full`,
+    expectedProjectRef: projectRef,
+    tlsCaCertificate,
+  }, {
+    createClient: harness.createClient,
+  })
+
+  assert.deepEqual(result, {
+    status: 'pass',
+    databaseProjectRefVerified: true,
+  })
+  assert.deepEqual(harness.clientConfigs[0]?.ssl, {
+    rejectUnauthorized: true,
+    ca: tlsCaCertificate,
+  })
+  assert.equal(new URL(harness.clientConfigs[0]?.connectionString).searchParams.has('sslmode'), false)
+  assert.equal(harness.calls.some(([sql]) => String(sql).includes('SELECT 1 AS cleanup_connection_ready')), true)
+  assert.equal(harness.calls.some(([sql]) => String(sql).trim() === 'BEGIN'), false)
+  const effectiveClient = new pg.Client(harness.clientConfigs[0])
+  assert.deepEqual(effectiveClient.connectionParameters.ssl, {
+    rejectUnauthorized: true,
+    ca: tlsCaCertificate,
+  })
 })
 
 test('rejects connection-string options that could redirect or downgrade the cleanup connection', async () => {
