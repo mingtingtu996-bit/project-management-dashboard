@@ -25,6 +25,14 @@ describe('runtime deployment security contract', () => {
     expect(nginx).toContain('proxy_set_header X-Forwarded-Proto $workbuddy_forwarded_proto;')
   })
 
+  it('keeps the nginx API request limit aligned with the application JSON limit', () => {
+    const nginx = readFileSync(resolve(workspaceRoot, 'deploy/nginx/lighthouse.conf'), 'utf8')
+    const serverEntry = readFileSync(resolve(workspaceRoot, 'server/src/index.ts'), 'utf8')
+
+    expect(serverEntry).toContain("express.json({ limit: '10mb' })")
+    expect(nginx).toMatch(/client_max_body_size\s+10m;/)
+  })
+
   it('separates the API role from the single scheduler worker role', () => {
     const compose = readFileSync(resolve(workspaceRoot, 'deploy/docker-compose.lighthouse.yml'), 'utf8')
     const apiSection = compose.slice(compose.indexOf('  api:'), compose.indexOf('  worker:'))
@@ -38,6 +46,7 @@ describe('runtime deployment security contract', () => {
     expect(workerSection).toContain('DB_SQL_EXECUTION_MODE: direct')
     expect(workerSection).toContain('DB_POOL_MAX: "5"')
     expect(workerSection).toContain('DB_POOL_WARM_CONNECTIONS: "1"')
+    expect(workerSection).toContain('DB_CONNECTION_TIMEOUT_MS: "15000"')
     expect(workerSection).not.toMatch(/^\s+ports:/m)
     expect(workerSection).not.toContain('expose:')
   })

@@ -3356,6 +3356,13 @@
     },
     {
       "kind": "migration",
+      "id": "336_runtime_postgrest_role_boundary",
+      "architectureUnit": "底座：平台运行观测",
+      "runtimeScope": "platform_foundation",
+      "assignmentReason": "allows the private backend runtime JWT to assume the existing RLS-governed role through PostgREST authenticator"
+    },
+    {
+      "kind": "migration",
       "id": "CLEAN_MIGRATION",
       "architectureUnit": "底座：平台运行观测",
       "runtimeScope": "platform_foundation",

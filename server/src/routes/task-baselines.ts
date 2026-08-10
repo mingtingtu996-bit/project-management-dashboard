@@ -220,6 +220,7 @@ const BASELINE_ITEM_JSON_COLUMNS = [
   'generation_metadata',
   'seed_versions',
 ] as const
+const BASELINE_ITEM_INSERT_BATCH_SIZE = 10
 
 type BaselineApiRow = TaskBaseline & {
   business_version_label?: string
@@ -1224,6 +1225,7 @@ async function persistBaselineItems(
   if (client) {
     return insertRowsReturning<TaskBaselineItem>(client, 'task_baseline_items', payload, {
       jsonColumns: BASELINE_ITEM_JSON_COLUMNS,
+      maxRowsPerQuery: BASELINE_ITEM_INSERT_BATCH_SIZE,
     })
   }
   const { data, error } = await supabase.from('task_baseline_items').insert(payload).select('*')

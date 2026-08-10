@@ -135,6 +135,25 @@ RETURNING outbox.event_key`,
     expect(mocks.from).not.toHaveBeenCalled()
   })
 
+  it('preserves PostgreSQL JSONB existence operators in native positional SQL', async () => {
+    const sql = `/* duration-learning-runtime-jsonb-authority */
+WITH selected AS (
+  SELECT publication_key
+  FROM public.duration_learning_runtime_publications
+  WHERE publication_stage = $1
+)
+SELECT outcome.id
+FROM public.duration_plan_network_outcomes outcome
+JOIN selected ON selected.publication_key = outcome.publication_key
+WHERE outcome.metadata -> 'source_evidence_refs' ? (
+  'duration_learning_runtime_publications:' || outcome.publication_key
+)`
+
+    await executeSQL(sql, ['canary'])
+
+    expect(mocks.rawQuery).toHaveBeenCalledWith(sql, ['canary'])
+  })
+
   it('supports literal LIMIT values', async () => {
     await executeSQL('SELECT * FROM tasks WHERE id = ? LIMIT 1', ['task-1'])
 

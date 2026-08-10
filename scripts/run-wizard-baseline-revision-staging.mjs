@@ -159,6 +159,22 @@ if (!Number.isInteger(generationPollAttempts) || generationPollAttempts < 1 || g
 if (!Number.isInteger(generationPollDelayMs) || generationPollDelayMs < 10 || generationPollDelayMs > 10_000) {
   throw new Error('generation-poll-delay-ms must be an integer between 10 and 10000')
 }
+const generationStatusRetryAttempts = Number(args.get('generation-status-retry-attempts') ?? 5)
+const generationStatusRetryDelayMs = Number(args.get('generation-status-retry-delay-ms') ?? 1_000)
+if (!Number.isInteger(generationStatusRetryAttempts) || generationStatusRetryAttempts < 1 || generationStatusRetryAttempts > 30) {
+  throw new Error('generation-status-retry-attempts must be an integer between 1 and 30')
+}
+if (!Number.isInteger(generationStatusRetryDelayMs) || generationStatusRetryDelayMs < 10 || generationStatusRetryDelayMs > 10_000) {
+  throw new Error('generation-status-retry-delay-ms must be an integer between 10 and 10000')
+}
+const cleanupGenerationAttempts = Number(args.get('cleanup-generation-attempts') ?? 30)
+const cleanupGenerationDelayMs = Number(args.get('cleanup-generation-delay-ms') ?? 2_000)
+if (!Number.isInteger(cleanupGenerationAttempts) || cleanupGenerationAttempts < 1 || cleanupGenerationAttempts > 150) {
+  throw new Error('cleanup-generation-attempts must be an integer between 1 and 150')
+}
+if (!Number.isInteger(cleanupGenerationDelayMs) || cleanupGenerationDelayMs < 10 || cleanupGenerationDelayMs > 10_000) {
+  throw new Error('cleanup-generation-delay-ms must be an integer between 10 and 10000')
+}
 const runId = `${targetEnvironment}-baseline-${Date.now()}`
 const diagnosticProjectName = `Disposable Residential Baseline ${runId}`
 const plannedProjectId = String(args.get('project-id') ?? randomUUID()).trim()
@@ -521,6 +537,8 @@ const result = {
 let accessToken = null
 let projectId = plannedProjectId
 let createRequestOutcome = 'not_started'
+let activeGenerationAttemptId = null
+let activeGenerationTerminal = false
 
 function writeResultReport() {
   result.generatedAt = new Date().toISOString()
@@ -552,13 +570,32 @@ function assertApi(label, apiResult, allowedStatuses) {
   return apiResult.body?.data
 }
 
-async function waitForWizardGeneration(targetProjectId, attemptId) {
-  let lastState = 'queued'
-  for (let attempt = 1; attempt <= generationPollAttempts; attempt += 1) {
-    const statusCall = await apiRequest(
+async function readWizardGenerationStatus(targetProjectId, attemptId, retryAttempts = generationStatusRetryAttempts) {
+  let statusCall = null
+  for (let retry = 1; retry <= retryAttempts; retry += 1) {
+    statusCall = await apiRequest(
       'GET',
       `/api/projects/${targetProjectId}/wizard/generation/${encodeURIComponent(attemptId)}`,
     )
+    const isTransientServerError = statusCall.response.status >= 500 && statusCall.response.status <= 599
+    if (!isTransientServerError || retry === retryAttempts) return statusCall
+
+    result.steps.commitWizardGeneration = {
+      ...result.steps.commitWizardGeneration,
+      status: 'running',
+      transientStatusRetryCount: retry,
+      lastTransientStatusHttpStatus: statusCall.response.status,
+    }
+    writeResultReport()
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, generationStatusRetryDelayMs))
+  }
+  return statusCall
+}
+
+async function waitForWizardGeneration(targetProjectId, attemptId) {
+  let lastState = 'queued'
+  for (let attempt = 1; attempt <= generationPollAttempts; attempt += 1) {
+    const statusCall = await readWizardGenerationStatus(targetProjectId, attemptId)
     const generation = assertApi('read wizard generation status', statusCall, [200])
     const observedAttemptId = requireValue(generation?.attemptId, 'wizard generation status attempt id')
     if (observedAttemptId !== attemptId) {
@@ -572,8 +609,12 @@ async function waitForWizardGeneration(targetProjectId, attemptId) {
       generationState: lastState,
       generationPollCount: attempt,
     }
-    if (lastState === 'completed') return { generation, attempts: attempt }
+    if (lastState === 'completed') {
+      activeGenerationTerminal = true
+      return { generation, attempts: attempt }
+    }
     if (lastState === 'failed') {
+      activeGenerationTerminal = true
       const errorCode = String(generation?.errorCode ?? 'WIZARD_GENERATION_FAILED').trim()
         || 'WIZARD_GENERATION_FAILED'
       result.steps.commitWizardGeneration.errorCode = errorCode
@@ -599,6 +640,56 @@ async function waitForWizardGeneration(targetProjectId, attemptId) {
   throw new Error(
     `wizard generation did not complete after ${generationPollAttempts} status checks; lastState=${lastState}`,
   )
+}
+
+async function waitForGenerationToSettleBeforeCleanup(targetProjectId) {
+  if (!activeGenerationAttemptId || activeGenerationTerminal) {
+    return { required: false, settled: true, attempts: 0, state: null }
+  }
+
+  let lastHttpStatus = null
+  let lastState = null
+  let lastError = null
+  for (let attempt = 1; attempt <= cleanupGenerationAttempts; attempt += 1) {
+    try {
+      const statusCall = await readWizardGenerationStatus(targetProjectId, activeGenerationAttemptId, 1)
+      lastHttpStatus = statusCall.response.status
+      const generation = assertApi('read wizard generation before cleanup', statusCall, [200])
+      const observedAttemptId = requireValue(generation?.attemptId, 'wizard cleanup generation attempt id')
+      if (observedAttemptId !== activeGenerationAttemptId) {
+        throw new Error('wizard cleanup generation status returned a different attempt id')
+      }
+      lastState = requireValue(generation?.state, 'wizard cleanup generation state')
+      if (lastState === 'completed' || lastState === 'failed') {
+        activeGenerationTerminal = true
+        result.steps.generationCleanupWait = {
+          status: 'pass',
+          state: lastState,
+          attempts: attempt,
+          httpStatus: lastHttpStatus,
+        }
+        return { required: true, settled: true, attempts: attempt, state: lastState }
+      }
+      if (!['queued', 'running'].includes(lastState)) {
+        throw new Error(`wizard cleanup generation returned unsupported state: ${lastState}`)
+      }
+      lastError = null
+    } catch (error) {
+      lastError = error
+    }
+    if (attempt < cleanupGenerationAttempts) {
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, cleanupGenerationDelayMs))
+    }
+  }
+
+  result.steps.generationCleanupWait = {
+    status: 'blocked',
+    attempts: cleanupGenerationAttempts,
+    lastState,
+    lastHttpStatus,
+    message: lastError instanceof Error ? lastError.message : 'generation did not reach a terminal state',
+  }
+  return { required: true, settled: false, attempts: cleanupGenerationAttempts, state: lastState }
 }
 
 async function authenticate(expectedCompanyId = requestedCompanyId) {
@@ -692,6 +783,17 @@ async function readDurationAccuracySummary() {
 async function cleanupProject(targetProjectId = projectId) {
   if (!targetProjectId || !accessToken) return
   try {
+    const generationSettlement = await waitForGenerationToSettleBeforeCleanup(targetProjectId)
+    if (generationSettlement.required && !generationSettlement.settled) {
+      result.cleanup = {
+        status: 'fail',
+        generationSettlement: 'not_proven_terminal',
+        projectPhysicallyDeleted: false,
+        projectUnreadable: false,
+      }
+      result.status = 'fail'
+      return
+    }
     const preDeleteReadCall = await apiRequest('GET', `/api/projects/${targetProjectId}`)
     if (preDeleteReadCall.response.status === 404) {
       result.cleanup = {
@@ -852,6 +954,10 @@ if (cleanupSourceReportPath) {
     result.projectName = String(previousResult?.projectName ?? '').trim()
       || `Disposable Residential Baseline ${result.diagnosticRunId}`
     result.createRequestOutcome = String(previousResult?.createRequestOutcome ?? 'unknown')
+    activeGenerationAttemptId = String(previousResult?.steps?.commitWizardGeneration?.attemptId ?? '').trim() || null
+    activeGenerationTerminal = ['completed', 'failed'].includes(
+      String(previousResult?.steps?.commitWizardGeneration?.generationState ?? '').trim(),
+    )
     await authenticate(String(previousResult?.companyId ?? '').trim())
     if (!projectId) {
       await recoverProjectIdByDiagnosticRunId(result.diagnosticRunId, result.projectName)
@@ -1280,6 +1386,7 @@ try {
   let generationPollCount = null
   if (asyncGeneration) {
     generationAttemptId = requireValue(generation.attemptId, 'wizard generation attempt id')
+    activeGenerationAttemptId = generationAttemptId
     const queuedState = requireValue(generation.state, 'queued wizard generation state')
     if (queuedState !== 'queued') {
       throw new Error(`queued wizard generation returned unexpected state: ${queuedState}`)
@@ -1446,19 +1553,35 @@ try {
   const adjustedItemId = requireValue(baselineItems[0]?.id, 'adjusted item id')
   const noteBefore = String(baselineItems[0]?.notes ?? '')
   const noteAfter = `User plan adjustment ${runId}`
-  const adjustedItems = baselineItems.map((item, index) => index === 0 ? { ...item, notes: noteAfter } : item)
-  const saveCall = await apiRequest('PUT', `/api/task-baselines/${baselineId}`, {
-    title: baseline.title,
-    description: baseline.description ?? null,
-    effective_from: baseline.effective_from ?? null,
-    effective_to: baseline.effective_to ?? null,
-    items: adjustedItems,
+  const fieldRegistryCall = await apiRequest(
+    'GET',
+    `/api/planning/field-registry?projectId=${encodeURIComponent(projectId)}&surface=baseline`,
+  )
+  const fieldRegistry = assertApi('read baseline field registry', fieldRegistryCall, [200])
+  const fieldRegistryVersion = requireValue(fieldRegistry?.registryVersion, 'baseline field registry version')
+  result.steps.baselineFieldRegistryReadback = {
+    status: 'pass',
+    httpStatus: fieldRegistryCall.response.status,
+    fieldRegistryVersion,
+  }
+
+  const saveCall = await apiRequest('POST', `/api/task-baselines/${baselineId}/commit`, {
+    projectId,
+    surface: 'baseline',
+    resourceId: baselineId,
+    baseVersion: baseline.version ?? undefined,
+    fieldRegistryVersion,
+    operations: [{
+      type: 'update_row',
+      rowId: adjustedItemId,
+      values: { notes: noteAfter },
+    }],
   })
   const saved = assertApi('save plan adjustment', saveCall, [200])
   result.steps.savePlanAdjustment = {
     status: 'pass',
     httpStatus: saveCall.response.status,
-    itemCount: saved?.items?.length ?? null,
+    itemCount: Array.isArray(saved?.rows) ? saved.rows.length : null,
     adjustedItemId,
     noteBefore,
     noteAfter,
@@ -1477,6 +1600,8 @@ try {
 
   const publishCall = await apiRequest('POST', `/api/task-baselines/${baselineId}/publish`, {
     version: readBack.version ?? null,
+    cause_code: 'other',
+    change_reason: noteAfter,
   })
   const published = assertApi('publish edited baseline', publishCall, [200])
   if (published?.status !== 'confirmed') throw new Error(`published baseline status is ${published?.status ?? 'missing'}`)
@@ -1485,6 +1610,8 @@ try {
     httpStatus: publishCall.response.status,
     baselineStatus: published.status,
     version: published.version ?? null,
+    causeCode: 'other',
+    changeReason: noteAfter,
   }
 
   const revisionIdempotencyKey = `${runId}-revision`

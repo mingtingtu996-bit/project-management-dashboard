@@ -2,7 +2,6 @@
 // 封装所有数据库操作，对外接口与原 dbService.ts 完全兼容
 // 使用 @supabase/supabase-js SDK + Supabase REST API
 
-import { createClient } from '@supabase/supabase-js'
 import { v4 as uuidv4 } from 'uuid'
 import type {
   Project,
@@ -45,7 +44,10 @@ import {
 } from '../domain/riskIssueWorkflowPolicy.js'
 import { classifyProgressSnapshotSource, normalizeProgressSnapshotSource } from '../utils/progressSnapshotSource.js'
 import { shouldRecordTaskProgressSnapshot } from '../utils/taskProgressSnapshotPolicy.js'
-import { resolveSupabaseRuntimeKey } from './runtimeCredentialBoundary.js'
+import {
+  createSupabaseRuntimeClient,
+  resolveSupabaseRuntimeClientCredentials,
+} from './runtimeCredentialBoundary.js'
 import { createJobLeaseFencedFetch } from './jobLeaseFenceContext.js'
 import {
   recordChangedExecutionFacts,
@@ -110,13 +112,13 @@ function runBusinessSideEffect(
 
 // ─── Supabase 初始化 ──────────────────────────────────────────────────────────
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || ''
-const supabaseKey = resolveSupabaseRuntimeKey()
+const { gatewayKey: supabaseGatewayKey, runtimeKey: supabaseRuntimeKey } = resolveSupabaseRuntimeClientCredentials()
 
-if (!supabaseUrl || !supabaseKey) {
-  console.warn('[dbService] WARNING: SUPABASE_URL or SUPABASE_KEY not set')
+if (!supabaseUrl || !supabaseGatewayKey || !supabaseRuntimeKey) {
+  console.warn('[dbService] WARNING: SUPABASE_URL, SUPABASE_ANON_KEY, or SUPABASE_RUNTIME_KEY not set')
 }
 
-const supabase = createClient(supabaseUrl, supabaseKey, {
+const supabase = createSupabaseRuntimeClient(supabaseUrl, {
   global: {
     fetch: createJobLeaseFencedFetch(),
   },
@@ -721,7 +723,81 @@ function resolveSqlNumericToken(token: string | undefined, params: any[], index:
   return { value, consumed: 0 }
 }
 
-function convertQuestionPlaceholdersToPg(sql: string) {
+function containsNativePostgresPlaceholder(sql: string) {
+  let quote: "'" | '"' | null = null
+  let lineComment = false
+  let blockComment = false
+  let dollarQuote: string | null = null
+
+  for (let cursor = 0; cursor < sql.length; cursor += 1) {
+    const char = sql[cursor]
+    const next = sql[cursor + 1]
+
+    if (dollarQuote) {
+      if (sql.startsWith(dollarQuote, cursor)) {
+        cursor += dollarQuote.length - 1
+        dollarQuote = null
+      }
+      continue
+    }
+
+    if (lineComment) {
+      if (char === "\n" || char === "\r") lineComment = false
+      continue
+    }
+
+    if (blockComment) {
+      if (char === '*' && next === '/') {
+        blockComment = false
+        cursor += 1
+      }
+      continue
+    }
+
+    if (quote) {
+      if (char === quote) {
+        if (quote === "'" && next === "'") {
+          cursor += 1
+        } else {
+          quote = null
+        }
+      }
+      continue
+    }
+
+    if (char === "'" || char === '"') {
+      quote = char
+      continue
+    }
+
+    if (char === '-' && next === '-') {
+      lineComment = true
+      cursor += 1
+      continue
+    }
+
+    if (char === '/' && next === '*') {
+      blockComment = true
+      cursor += 1
+      continue
+    }
+
+    const positionalPlaceholder = sql.slice(cursor).match(/^\$\d+(?![A-Za-z0-9_])/)
+    if (positionalPlaceholder) return true
+
+    const dollarQuoteStart = sql.slice(cursor).match(/^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/)
+    if (dollarQuoteStart) {
+      dollarQuote = dollarQuoteStart[0]
+      cursor += dollarQuote.length - 1
+    }
+  }
+
+  return false
+}
+
+function convertQuestionPlaceholdersToPg(sql: string, params: any[]) {
+  if (params.length === 0 || containsNativePostgresPlaceholder(sql)) return sql
+
   let index = 0
   let quote: "'" | '"' | null = null
   let converted = ''
@@ -766,7 +842,7 @@ async function runDirectExecuteSqlFallback<T = any>(
   params: any[],
   label: string,
 ): Promise<T[]> {
-  const pgSql = convertQuestionPlaceholdersToPg(sql)
+  const pgSql = convertQuestionPlaceholdersToPg(sql, params)
   const result = await withDirectQueryTimeout(rawQuery(pgSql, params), label)
   return result.rows as T[]
 }
@@ -1243,6 +1319,10 @@ function clearStructuredClosureOutcome(fields: Partial<Risk> | Partial<Issue>) {
     closed_by: null,
     closure_recorded_at: null,
   })
+}
+
+function serializeClosureEvidenceRefs(value: unknown) {
+  return JSON.stringify(value ?? [])
 }
 
 function normalizeDbChangeLogSource(source?: ChangeSource): DbChangeLogSource {
@@ -3202,7 +3282,7 @@ async function createRiskInTransaction(
       row.closure_result_code,
       row.closure_result_summary,
       row.closure_effectiveness,
-      row.closure_evidence_refs,
+      serializeClosureEvidenceRefs(row.closure_evidence_refs),
       row.closure_cause_attribution_id,
       row.closed_by,
       row.closure_recorded_at,
@@ -3300,7 +3380,9 @@ async function updateRiskInTransaction(
     value !== undefined && mutableColumns.has(column)
   ))
   const where = ['id = ?', 'project_id = ?']
-  const values = entries.map(([, value]) => value)
+  const values = entries.map(([column, value]) => (
+    column === 'closure_evidence_refs' ? serializeClosureEvidenceRefs(value) : value
+  ))
   values.push(id, oldRisk.project_id)
   if (expectedVersion !== undefined) {
     where.push('version = ?')
@@ -3803,7 +3885,7 @@ async function createIssueInTransaction(
       row.source_type, row.source_id, row.source_entity_type, row.source_entity_id,
       row.chain_id, row.severity, row.priority, row.pending_manual_close, row.status,
       row.closed_reason, row.closed_at, row.closure_result_code, row.closure_result_summary,
-      row.closure_effectiveness, row.closure_evidence_refs, row.closure_cause_attribution_id,
+      row.closure_effectiveness, serializeClosureEvidenceRefs(row.closure_evidence_refs), row.closure_cause_attribution_id,
       row.closed_by, row.closure_recorded_at, row.version, row.created_at, row.updated_at,
     ],
   )
@@ -3899,7 +3981,9 @@ async function updateIssueInTransaction(
       value !== undefined && mutableColumns.has(column)
     ))
     const where = ['id = ?', 'project_id = ?']
-    const values = entries.map(([, value]) => value)
+    const values = entries.map(([column, value]) => (
+      column === 'closure_evidence_refs' ? serializeClosureEvidenceRefs(value) : value
+    ))
     values.push(id, oldIssue.project_id)
     if (expectedVersion !== undefined) {
       where.push('version = ?')

@@ -1342,11 +1342,11 @@ describe('project critical path service', () => {
       && call[1]?.[1] === 'duration_learning_runtime:critical_path_rule_candidate:exact-v1'
     ))
     expect(observationInsert).toBeTruthy()
-    expect(observationInsert?.[1]?.[5]).toEqual(expect.objectContaining({
+    expect(JSON.parse(String(observationInsert?.[1]?.[5] ?? 'null'))).toEqual(expect.objectContaining({
       criticalPathInputHash: expect.stringMatching(/^sha256:/),
       taskNetworkInputHash: expect.stringMatching(/^sha256:/),
     }))
-    expect(observationInsert?.[1]?.[6]).toEqual(expect.arrayContaining([
+    expect(JSON.parse(String(observationInsert?.[1]?.[6] ?? 'null'))).toEqual(expect.arrayContaining([
       expect.stringMatching(/^critical_path_inputs:sha256:/),
     ]))
   })

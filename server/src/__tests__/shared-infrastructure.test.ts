@@ -88,6 +88,13 @@ const mocks = vi.hoisted(() => {
     tables[key] = value.map((row) => ({ ...row }))
   }
 
+  const decodeDatabaseValue = (column: string, value: unknown) => {
+    if (column === 'closure_evidence_refs' && typeof value === 'string') {
+      return JSON.parse(value)
+    }
+    return value
+  }
+
   const transactionQuery = vi.fn(async (sql: string, params: unknown[] = []) => {
     const normalized = sql.replace(/\s+/g, ' ').trim()
     const selectMatch = normalized.match(/^SELECT \* FROM (risks|issues) WHERE id = \$(\d+)(?: LIMIT 1)?(?: FOR UPDATE)?$/i)
@@ -106,7 +113,7 @@ const mocks = vi.hoisted(() => {
       })
       if (!row) return { rows: [], rowCount: 0 }
       for (const [, column, paramIndex] of setClause.matchAll(/([a-z_]+) = \$(\d+)/gi)) {
-        row[column] = params[Number(paramIndex) - 1]
+        row[column] = decodeDatabaseValue(column, params[Number(paramIndex) - 1])
       }
       return { rows: [{ id: row.id }], rowCount: 1 }
     }

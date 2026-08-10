@@ -1989,7 +1989,7 @@ function networkEligibleCte(assetKey: DurationLearningRuntimeAssetKey) {
               'duration_learning_runtime_publications:' || outcome.publication_key
             )
             and exact_observation.source_evidence_refs ? (
-              'critical_path_inputs:' || outcome.metadata ->> 'critical_path_input_hash'
+              'critical_path_inputs:' || (outcome.metadata ->> 'critical_path_input_hash')
             )
        )`
     : assetKey === 'dependency_rule_candidate'
@@ -2751,7 +2751,7 @@ function durationLearningRuntimeMonitoringCollectorSql(mode: 'batch' | 'exact_fo
                           'duration_learning_runtime_publications:' || publication.publication_key
                         )
                         and exact_observation.source_evidence_refs ? (
-                          'critical_path_inputs:' || source.metadata ->> 'critical_path_input_hash'
+                          'critical_path_inputs:' || (source.metadata ->> 'critical_path_input_hash')
                         )
                         and exact_observation.observation_context ->> 'companyId' = source.company_id::text
                         and exact_observation.observation_context ->> 'criticalPathInputHash'

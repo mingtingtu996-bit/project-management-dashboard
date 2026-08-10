@@ -716,6 +716,8 @@ describe('deploy workflow contract', () => {
     expect(deployScript).toContain('run_docker_compose')
     expect(deployScript).toContain('read_env_value SUPABASE_URL')
     expect(deployScript).toContain('read_env_value SUPABASE_ANON_KEY')
+    expect(deployScript).toContain('SUPABASE_ANON_KEY is required as the registered Supabase gateway apikey')
+    expect(deployScript).toContain('SUPABASE_ANON_KEY and SUPABASE_RUNTIME_KEY must be distinct credentials')
     expect(deployScript).toContain('read_env_value AUTH_COOKIE_NAME')
     expect(deployScript).toContain('read_env_value JWT_ISSUER')
     expect(deployScript).toContain('read_env_value JWT_AUDIENCE')

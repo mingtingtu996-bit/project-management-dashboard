@@ -1,4 +1,5 @@
 import {
+  createDurationRuntimeConsumerObservationQueryExec,
   recordDurationRuntimeConsumerRuntimeCall,
   recordDurationRuntimeConsumerObservedContractArtifacts,
   type DurationRuntimeConsumerObservedArtifact,
@@ -114,6 +115,7 @@ async function recordConsumerArtifacts(
   consumerKey: string,
   input: RecordDurationRuntimeConsumerFacadeArtifactsInput,
 ): Promise<DurationRuntimeConsumerFacadeArtifactsResult> {
+  const queryExec = createDurationRuntimeConsumerObservationQueryExec(input.queryExec)
   const sourceEvidenceRefs = Array.from(new Set((input.sourceEvidenceRefs ?? [])
     .map((item) => String(item ?? '').trim())
     .filter(Boolean)))
@@ -122,7 +124,7 @@ async function recordConsumerArtifacts(
     .filter(Boolean)))
     .sort()
   const runtimeCallResult = await recordDurationRuntimeConsumerRuntimeCall({
-    queryExec: input.queryExec,
+    queryExec,
     consumerKey,
     runtimeEntryRef: input.runtimeEntryRef ?? RUNTIME_ENTRY_REFS_BY_CONSUMER_KEY[consumerKey],
     callContext: {
@@ -137,7 +139,7 @@ async function recordConsumerArtifacts(
     writesFactDirectly: input.writesFactDirectly,
   })
   const observationsResult = await recordDurationRuntimeConsumerObservedContractArtifacts({
-    queryExec: input.queryExec,
+    queryExec,
     consumerKey,
     artifacts: input.artifacts.map((artifact) => {
       const artifactSourceEvidenceRefs = Array.from(new Set((artifact.sourceEvidenceRefs ?? [])

@@ -109,6 +109,8 @@ test('wizard baseline revision staging smoke uses ordinary plan confirmation', (
   assert.match(smokeSource, /planQualityDiagnostics/)
   assert.match(smokeSource, /publish edited baseline/)
   assert.match(smokeSource, /Baseline revision smoke/)
+  assert.match(smokeSource, /cause_code: 'other'/)
+  assert.match(smokeSource, /change_reason: noteAfter/)
 
   for (const retiredRuntimeContract of [
     'PROJECT_MANAGER_REVIEW_REQUIRED',
@@ -982,6 +984,9 @@ test('ordinary staging user completes the full wizard and baseline smoke when ad
   let previewRequestCount = 0
   let generationStatusRequestCount = 0
   let commitRequestBody = null
+  let baselineCommitRequestBody = null
+  let legacyBaselinePutCount = 0
+  let publishRequestBody = null
   let baseline = {
     id: baselineId,
     title: 'Candidate baseline',
@@ -1066,6 +1071,10 @@ test('ordinary staging user completes the full wizard and baseline smoke when ad
     ) {
       generationStatusRequestCount += 1
       if (generationStatusRequestCount === 1) {
+        sendError(500, 'AUTH_ERROR', 'transient auth lookup failure')
+        return
+      }
+      if (generationStatusRequestCount === 2) {
         send(200, {
           projectId,
           attemptId: generationAttemptId,
@@ -1129,18 +1138,62 @@ test('ordinary staging user completes the full wizard and baseline smoke when ad
       })
       return
     }
+    if (req.method === 'GET' && requestUrl.pathname === '/api/planning/field-registry') {
+      assert.equal(requestUrl.searchParams.get('projectId'), projectId)
+      assert.equal(requestUrl.searchParams.get('surface'), 'baseline')
+      send(200, {
+        registryVersion: 'v1.4.7.6',
+        surface: 'baseline',
+        generatedAt: '2026-08-05T00:00:00.000Z',
+        updatedAt: '2026-08-05T00:00:00.000Z',
+        groups: [],
+        fields: [],
+      })
+      return
+    }
+    if (req.method === 'POST' && requestUrl.pathname === `/api/task-baselines/${baselineId}/commit`) {
+      baselineCommitRequestBody = requestBody
+      const noteOperation = requestBody?.operations?.find((operation) => (
+        operation?.type === 'update_row' && operation?.rowId === 'baseline-item-1'
+      ))
+      baseline = {
+        ...baseline,
+        version: 2,
+        items: baseline.items.map((item) => (
+          item.id === noteOperation?.rowId
+            ? { ...item, ...noteOperation.values }
+            : item
+        )),
+      }
+      send(200, {
+        surface: 'baseline',
+        resourceId: baselineId,
+        rows: baseline.items,
+        revision: 2,
+        createdRowCount: 0,
+        deletedRowCount: 0,
+        changedRowCount: requestBody?.operations?.length ?? 0,
+      })
+      return
+    }
     if (requestUrl.pathname === `/api/task-baselines/${baselineId}`) {
       if (req.method === 'GET') {
         send(200, baseline)
         return
       }
       if (req.method === 'PUT') {
+        legacyBaselinePutCount += 1
         baseline = { ...baseline, ...requestBody, version: 2 }
         send(200, baseline)
         return
       }
     }
     if (req.method === 'POST' && requestUrl.pathname === `/api/task-baselines/${baselineId}/publish`) {
+      publishRequestBody = requestBody
+      if (requestBody?.cause_code !== 'other' || typeof requestBody?.change_reason !== 'string' || requestBody.change_reason.length === 0) {
+        sendError(400, 'BASELINE_CHANGE_CAUSE_REQUIRED', 'structured publication cause required')
+        return
+      }
       baseline = { ...baseline, status: 'confirmed', version: 3 }
       send(200, baseline)
       return
@@ -1208,6 +1261,8 @@ test('ordinary staging user completes the full wizard and baseline smoke when ad
       '--report', reportPath,
       '--generation-poll-attempts', '5',
       '--generation-poll-delay-ms', '10',
+      '--generation-status-retry-attempts', '2',
+      '--generation-status-retry-delay-ms', '10',
     ], { cwd: workspaceRoot })
     let stderr = ''
     child.stderr.on('data', (chunk) => { stderr += chunk })
@@ -1222,7 +1277,20 @@ test('ordinary staging user completes the full wizard and baseline smoke when ad
   assert.equal(accuracyRequestCount, 1)
   assert.equal(previewRequestCount, canonicalBusinessPreviewCases.length)
   assert.equal(commitRequestBody?.asyncGeneration, true)
-  assert.equal(generationStatusRequestCount, 2)
+  assert.equal(legacyBaselinePutCount, 0)
+  assert.equal(baselineCommitRequestBody?.projectId, projectId)
+  assert.equal(baselineCommitRequestBody?.surface, 'baseline')
+  assert.equal(baselineCommitRequestBody?.resourceId, baselineId)
+  assert.equal(baselineCommitRequestBody?.fieldRegistryVersion, 'v1.4.7.6')
+  assert.deepEqual(baselineCommitRequestBody?.operations, [{
+    type: 'update_row',
+    rowId: 'baseline-item-1',
+    values: { notes: baseline.items[0].notes },
+  }])
+  assert.equal(Object.hasOwn(baselineCommitRequestBody?.clientContext ?? {}, 'rollupRows'), false)
+  assert.equal(publishRequestBody?.cause_code, 'other')
+  assert.match(publishRequestBody?.change_reason ?? '', /^User plan adjustment /u)
+  assert.equal(generationStatusRequestCount, 3)
   const report = childReport
   assert.equal(report.status, 'pass')
   assert.equal(report.steps.durationAccuracyReadback.status, 'unavailable')
@@ -1325,6 +1393,9 @@ test('staging smoke fails closed and cleans up when async wizard generation fail
       && requestUrl.pathname === `/api/projects/${projectId}/wizard/generation/${generationAttemptId}`
     ) {
       generationStatusRequestCount += 1
+      if (generationStatusState === 'running' && generationStatusRequestCount >= 3) {
+        generationStatusState = 'failed'
+      }
       send(200, {
         projectId,
         attemptId: generationAttemptId,
@@ -1415,7 +1486,7 @@ test('staging smoke fails closed and cleans up when async wizard generation fail
   const timeoutChildResult = await runSmoke(timeoutReportPath)
 
   assert.equal(timeoutChildResult.code, 1)
-  assert.equal(generationStatusRequestCount, 2)
+  assert.equal(generationStatusRequestCount, 3)
   assert.equal(downstreamReadCount, 0)
   assert.equal(project, null)
   const timeoutReport = JSON.parse(fs.readFileSync(timeoutReportPath, 'utf8'))

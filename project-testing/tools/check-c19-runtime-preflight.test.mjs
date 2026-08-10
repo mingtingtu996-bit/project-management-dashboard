@@ -10,7 +10,11 @@ import {
   parseArgs,
   resolveC19SelectedDatabaseProjectRef,
 } from './check-c19-runtime-preflight.mjs';
-import { hashProjectBusinessResidueReadback } from './project-residue-policy.mjs';
+import {
+  hashProjectBusinessResidueReadback,
+  isRetainedHistoricalProjectReferenceTable,
+  RETAINED_HISTORICAL_PROJECT_REFERENCE_TABLES,
+} from './project-residue-policy.mjs';
 
 const RELEASE_SHA = 'a'.repeat(40);
 const PROJECT_REF = 'wwdrkjnbvcbfytwnnyvs';
@@ -401,10 +405,14 @@ function buildSmoke({
 function buildProjectResidueReadback(projectResidues) {
   const scannedTables = Object.keys(projectResidues).sort();
   const retainedHistoricalResidue = scannedTables
-    .filter((tableName) => tableName === 'operation_logs' && projectResidues[tableName] > 0)
+    .filter((tableName) => (
+      isRetainedHistoricalProjectReferenceTable(tableName) && projectResidues[tableName] > 0
+    ))
     .map((tableName) => ({ tableName, rowCount: projectResidues[tableName] }));
   const nonZeroBusinessTables = scannedTables
-    .filter((tableName) => tableName !== 'operation_logs' && projectResidues[tableName] > 0)
+    .filter((tableName) => (
+      !isRetainedHistoricalProjectReferenceTable(tableName) && projectResidues[tableName] > 0
+    ))
     .map((tableName) => ({ tableName, rowCount: projectResidues[tableName] }));
   const totalBusinessResidueCount = nonZeroBusinessTables.reduce((sum, row) => sum + row.rowCount, 0);
   const readback = {
@@ -414,7 +422,7 @@ function buildProjectResidueReadback(projectResidues) {
     projectId: PROJECT_ID,
     scannedTableCount: scannedTables.length,
     scannedTables,
-    retainedHistoricalProjectReferenceTables: ['operation_logs'],
+    retainedHistoricalProjectReferenceTables: [...RETAINED_HISTORICAL_PROJECT_REFERENCE_TABLES],
     retainedHistoricalResidue,
     totalRetainedHistoricalResidueCount: retainedHistoricalResidue.reduce(
       (sum, row) => sum + row.rowCount,

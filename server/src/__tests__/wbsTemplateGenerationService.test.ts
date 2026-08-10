@@ -156,6 +156,10 @@ function callsForTable(calls: Array<{ sql: string, params: unknown[] }>, tableNa
   return calls.filter((call) => call.sql.toLowerCase().includes(tableName))
 }
 
+function parseJsonParam<T>(call: { params: unknown[] }, index: number): T {
+  return JSON.parse(String(call.params[index] ?? 'null')) as T
+}
+
 const IDENTIFIED_TEST_CONSTRUCTION_CALENDAR = {
   basis: 'official_construction_calendar_seed' as const,
   calendarRef: 'work_calendar',
@@ -1479,17 +1483,22 @@ describe('v1.4.7.2 WBS template generation service', () => {
 
     expect(generated.generationBatchId).toBe('batch-runtime-call-only')
     expect(callsForTable(calls, 'runtime_consumer_runtime_calls')).toHaveLength(1)
-    expect(callsForTable(calls, 'runtime_consumer_runtime_calls')[0].params).toEqual([
+    const runtimeCall = callsForTable(calls, 'runtime_consumer_runtime_calls')[0]
+    expect(runtimeCall.params.slice(0, 3)).toEqual([
       'wbsTemplateGenerationService',
       'wbsTemplateGenerationService:generateWbsTemplateRows',
       'called',
-      expect.objectContaining({
-        projectId: '00000000-0000-4000-8000-000000000001',
-        generationBatchId: 'batch-runtime-call-only',
-        runtimeAssetMode: 'no_published_artifact',
-        runtimeArtifactCount: 0,
-      }),
-      [expect.stringContaining('wbs_template_generation:00000000-0000-4000-8000-000000000001:batch-runtime-call-only:')],
+    ])
+    expect(parseJsonParam(runtimeCall, 3)).toEqual(expect.objectContaining({
+      projectId: '00000000-0000-4000-8000-000000000001',
+      generationBatchId: 'batch-runtime-call-only',
+      runtimeAssetMode: 'no_published_artifact',
+      runtimeArtifactCount: 0,
+    }))
+    expect(parseJsonParam(runtimeCall, 4)).toEqual([
+      expect.stringContaining('wbs_template_generation:00000000-0000-4000-8000-000000000001:batch-runtime-call-only:'),
+    ])
+    expect(runtimeCall.params.slice(5)).toEqual([
       false,
       false,
       '2026-06-15T12:00:00.000Z',

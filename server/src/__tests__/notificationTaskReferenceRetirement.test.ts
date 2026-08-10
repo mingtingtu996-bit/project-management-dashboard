@@ -148,7 +148,7 @@ describe('notification task reference retirement', () => {
     expect(query).toHaveBeenCalledTimes(1)
   })
 
-  it('treats technical operation logs as retained audit snapshots without masking notifications', () => {
+  it('treats registered technical audit rows as retained snapshots without masking notifications', () => {
     const diagnostic = readFileSync(
       resolve(workspaceRoot, 'scripts', 'diagnostics', 'live-workspace-isolation-regression.mjs'),
       'utf8',
@@ -160,7 +160,8 @@ describe('notification task reference retirement', () => {
 
     expect(diagnostic).toContain("from '../../project-testing/tools/project-residue-policy.mjs'")
     expect(diagnostic).toContain('!retainedHistoricalProjectReferenceTables.has(table)')
-    expect(residuePolicy).toContain("Object.freeze(['operation_logs'])")
+    expect(residuePolicy).toContain("'duration_learning_runtime_evidence_outbox_tombstones'")
+    expect(residuePolicy).toContain("'operation_logs'")
     expect(residuePolicy).not.toContain('notifications')
     expect(diagnostic).toContain("recordCheck('retained historical project references', 'done'")
   })

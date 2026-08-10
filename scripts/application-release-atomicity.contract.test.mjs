@@ -198,6 +198,44 @@ validate_jwt_secret_fingerprints "$MOCK_JWT_SECRET" "$MOCK_PEER_JWT_SECRET"
   }
 })
 
+test('deployment rejects runtime JWTs with invalid serialization or backend role claims', async () => {
+  const script = await source('scripts/deploy-lighthouse-server.sh')
+  const validateRuntimeKey = script.match(
+    /(validate_supabase_runtime_key_claim\(\) \{[\s\S]*?\n\})\n\n/u,
+  )?.[1]
+  assert.ok(
+    validateRuntimeKey,
+    'validate_supabase_runtime_key_claim must remain executable in isolation',
+  )
+
+  const encode = (value) => Buffer.from(JSON.stringify(value)).toString('base64url')
+  const token = (role, exp = Math.floor(Date.now() / 1000) + 3600) => (
+    `${encode({ alg: 'HS256', typ: 'JWT' })}.${encode({ role, exp, iss: 'supabase' })}.${Buffer.from('test-signature').toString('base64url')}`
+  )
+  const harness = `
+set -euo pipefail
+${python3Shim}
+${validateRuntimeKey}
+validate_supabase_runtime_key_claim "$MOCK_RUNTIME_KEY"
+`
+  const cases = [
+    [token('workbuddy_runtime'), 0],
+    [token('anon'), 1],
+    [token('authenticated'), 1],
+    [token('service_role'), 1],
+    [token('workbuddy_runtime_login'), 1],
+    [token('workbuddy_runtime', Math.floor(Date.now() / 1000) - 1), 1],
+    [`!.${encode({ role: 'workbuddy_runtime', exp: Math.floor(Date.now() / 1000) + 3600 })}.signature`, 1],
+    [`${encode({ alg: 'HS256', typ: 'JWT' })}.${encode({ role: 'workbuddy_runtime', exp: Math.floor(Date.now() / 1000) + 3600 })}.!`, 1],
+    ['not-a-jwt', 1],
+  ]
+  for (const [runtimeKey, expectedStatus] of cases) {
+    const result = runBash(harness, { MOCK_RUNTIME_KEY: runtimeKey })
+    assert.equal(result.status, expectedStatus, `${result.stdout}\n${result.stderr}`)
+    assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, new RegExp(runtimeKey, 'u'))
+  }
+})
+
 test('deployment workflow supplies the explicit bootstrap contract and runs the atomicity test', async () => {
   const [deployWorkflow, guardWorkflow] = await Promise.all([
     source('.github/workflows/deploy.yml'),
@@ -251,7 +289,11 @@ test('deployment workflow supplies the explicit bootstrap contract and runs the 
   assert.match(remoteFingerprintCheck.run, /sha256sum/u)
   assert.match(remoteFingerprintCheck.run, /PEER_DEPLOY_PATH/u)
   assert.match(remoteFingerprintCheck.run, /peer_actual_fingerprint/u)
+  assert.match(remoteFingerprintCheck.run, /SUPABASE_RUNTIME_KEY/u)
+  assert.match(remoteFingerprintCheck.run, /workbuddy_runtime/u)
+  assert.match(remoteFingerprintCheck.run, /urlsafe_b64decode/u)
   assert.doesNotMatch(remoteFingerprintCheck.run, /echo .*JWT.*SHA|printf .*fingerprint/u)
+  assert.doesNotMatch(remoteFingerprintCheck.run, /echo .*SUPABASE_RUNTIME_KEY/u)
   const fingerprintSyntax = spawnSync(bash, ['-n'], {
     input: remoteFingerprintCheck.run,
     encoding: 'utf8',

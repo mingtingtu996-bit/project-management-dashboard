@@ -716,13 +716,56 @@ jobs:
           [ "$(readlink -f "$ENV_FILE")" != "$(readlink -f "$PEER_ENV_FILE")" ]
           jwt_secret="$(awk -F= '$1 == "JWT_SECRET" { sub(/^[^=]*=/, ""); sub(/\r$/, ""); value = $0 } END { print value }' "$ENV_FILE")"
           peer_jwt_secret="$(awk -F= '$1 == "JWT_SECRET" { sub(/^[^=]*=/, ""); sub(/\r$/, ""); value = $0 } END { print value }' "$PEER_ENV_FILE")"
+          supabase_runtime_key="$(awk -F= '$1 == "SUPABASE_RUNTIME_KEY" { sub(/^[^=]*=/, ""); sub(/\r$/, ""); value = $0 } END { print value }' "$ENV_FILE")"
           [ "${#jwt_secret}" -ge 32 ]
           [ "${#peer_jwt_secret}" -ge 32 ]
+          [ -n "$supabase_runtime_key" ]
           actual_fingerprint="$(printf '%s' "$jwt_secret" | sha256sum | awk '{print $1}')"
           peer_actual_fingerprint="$(printf '%s' "$peer_jwt_secret" | sha256sum | awk '{print $1}')"
           [ "$actual_fingerprint" = "$EXPECTED_JWT_SECRET_SHA256" ]
           [ "$peer_actual_fingerprint" = "$PEER_JWT_SECRET_SHA256" ]
           [ "$actual_fingerprint" != "$peer_actual_fingerprint" ]
+          printf '%s' "$supabase_runtime_key" | python3 -c '
+          import base64
+          import binascii
+          import json
+          import re
+          import sys
+          import time
+
+          token = sys.stdin.read().strip()
+          parts = token.split(".")
+
+          def decode_segment(segment, label):
+              if not re.fullmatch(r"[A-Za-z0-9_-]+", segment) or len(segment) % 4 == 1:
+                  raise ValueError(f"invalid compact JWT {label}")
+              raw = base64.urlsafe_b64decode(segment + "=" * (-len(segment) % 4))
+              if not raw or base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=") != segment:
+                  raise ValueError(f"invalid compact JWT {label}")
+              return raw
+
+          try:
+              if len(parts) != 3 or not all(parts):
+                  raise ValueError("invalid JWT structure")
+              header = json.loads(decode_segment(parts[0], "header").decode("utf-8"))
+              payload = json.loads(decode_segment(parts[1], "payload").decode("utf-8"))
+              decode_segment(parts[2], "signature")
+          except (ValueError, UnicodeDecodeError, json.JSONDecodeError, binascii.Error):
+              print("Remote SUPABASE_RUNTIME_KEY must use valid compact JWT serialization.", file=sys.stderr)
+              raise SystemExit(1)
+          algorithm = header.get("alg") if isinstance(header, dict) else None
+          if not isinstance(algorithm, str) or not algorithm.strip() or algorithm.lower() == "none":
+              print("Remote SUPABASE_RUNTIME_KEY JWT header must declare a signing algorithm.", file=sys.stderr)
+              raise SystemExit(1)
+          if not isinstance(payload, dict) or payload.get("role") != "workbuddy_runtime":
+              print("Remote SUPABASE_RUNTIME_KEY JWT role must be workbuddy_runtime.", file=sys.stderr)
+              raise SystemExit(1)
+          expires_at = payload.get("exp")
+          if isinstance(expires_at, bool) or not isinstance(expires_at, int) or expires_at <= int(time.time()):
+              print("Remote SUPABASE_RUNTIME_KEY JWT is expired or has no valid expiry.", file=sys.stderr)
+              raise SystemExit(1)
+          '
+          unset supabase_runtime_key
           REMOTE
 
       - name: Verify deployment target database identity
@@ -876,6 +919,40 @@ jobs:
         run: |
           set -o pipefail
           npm run migrate:diagnose | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Authorize runtime PostgREST role boundary 336
+        if: steps.migration-config.outputs.can_run == 'true'
+        env:
+          DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          RUNTIME_POSTGREST_ROLE_BOUNDARY_APPROVED_SHA: ${{ vars.MIGRATION_336_APPROVED_SHA }}
+          RUNTIME_POSTGREST_ROLE_BOUNDARY_STAGING_EVIDENCE_REF: ${{ vars.MIGRATION_336_STAGING_EVIDENCE_REF }}
+        run: |
+          set -euo pipefail
+          plan_output="$(npm run --silent migrate:plan)"
+          if ! grep -Fq -- "336_runtime_postgrest_role_boundary.sql" <<< "$plan_output"; then
+            exit 0
+          fi
+
+          if [ "$RUNTIME_POSTGREST_ROLE_BOUNDARY_APPROVED_SHA" != "$GITHUB_SHA" ]; then
+            echo "Migration 336 is not approved for this exact $DEPLOY_TARGET SHA." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          case "$DEPLOY_TARGET" in
+            staging)
+              echo "Migration 336 is approved for this exact staging SHA." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            production)
+              if [[ ! "$RUNTIME_POSTGREST_ROLE_BOUNDARY_STAGING_EVIDENCE_REF" =~ ^https://github\.com/mingtingtu996-bit/project-management-dashboard/actions/runs/[0-9]+$ ]]; then
+                echo "Migration 336 production promotion requires successful staging readback evidence from a deployment run URL." >> "$GITHUB_STEP_SUMMARY"
+                exit 1
+              fi
+              ;;
+            *)
+              echo "Migration 336 is restricted to staging-first, then production promotion." >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+              ;;
+          esac
 
       - name: Authorize duration learning legacy runtime retirement 322
         id: duration-learning-retirement-322

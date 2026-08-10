@@ -21,6 +21,7 @@ function orderedColumns(rows: object[]) {
 
 type InsertRowsOptions = {
   jsonColumns?: readonly string[]
+  maxRowsPerQuery?: number
 }
 
 function normalizeParameterValue(column: string, value: unknown, options?: InsertRowsOptions) {
@@ -59,24 +60,35 @@ export async function insertRowsReturning<T>(
   const columns = orderedColumns(rows)
   if (columns.length === 0) return []
 
-  const values: unknown[] = []
-  const valueGroups = rows.map((row) => {
-    const record = row as Record<string, unknown>
-    const placeholders = columns.map((column) => {
-      values.push(normalizeParameterValue(column, record[column], options))
-      return `$${values.length}`
+  const configuredBatchSize = Number(options?.maxRowsPerQuery)
+  const batchSize = Number.isInteger(configuredBatchSize) && configuredBatchSize > 0
+    ? Math.min(configuredBatchSize, rows.length)
+    : rows.length
+  const insertedRows: T[] = []
+
+  for (let offset = 0; offset < rows.length; offset += batchSize) {
+    const batch = rows.slice(offset, offset + batchSize)
+    const values: unknown[] = []
+    const valueGroups = batch.map((row) => {
+      const record = row as Record<string, unknown>
+      const placeholders = columns.map((column) => {
+        values.push(normalizeParameterValue(column, record[column], options))
+        return `$${values.length}`
+      })
+      return `(${placeholders.join(', ')})`
     })
-    return `(${placeholders.join(', ')})`
-  })
 
-  const sql = [
-    `INSERT INTO ${quoteIdentifier(tableName)} (${columns.map(quoteIdentifier).join(', ')})`,
-    `VALUES ${valueGroups.join(', ')}`,
-    'RETURNING *',
-  ].join(' ')
+    const sql = [
+      `INSERT INTO ${quoteIdentifier(tableName)} (${columns.map(quoteIdentifier).join(', ')})`,
+      `VALUES ${valueGroups.join(', ')}`,
+      'RETURNING *',
+    ].join(' ')
 
-  const { rows: insertedRows } = await client.query(sql, values)
-  return insertedRows as T[]
+    const result = await client.query(sql, values)
+    insertedRows.push(...result.rows as T[])
+  }
+
+  return insertedRows
 }
 
 export async function insertRows(
