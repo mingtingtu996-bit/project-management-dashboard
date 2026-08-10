@@ -109,6 +109,8 @@ test('wizard baseline revision staging smoke uses ordinary plan confirmation', (
   assert.match(smokeSource, /planQualityDiagnostics/)
   assert.match(smokeSource, /publish edited baseline/)
   assert.match(smokeSource, /Baseline revision smoke/)
+  assert.match(smokeSource, /cause_code: 'other'/)
+  assert.match(smokeSource, /change_reason: noteAfter/)
 
   for (const retiredRuntimeContract of [
     'PROJECT_MANAGER_REVIEW_REQUIRED',
@@ -982,6 +984,7 @@ test('ordinary staging user completes the full wizard and baseline smoke when ad
   let previewRequestCount = 0
   let generationStatusRequestCount = 0
   let commitRequestBody = null
+  let publishRequestBody = null
   let baseline = {
     id: baselineId,
     title: 'Candidate baseline',
@@ -1145,6 +1148,11 @@ test('ordinary staging user completes the full wizard and baseline smoke when ad
       }
     }
     if (req.method === 'POST' && requestUrl.pathname === `/api/task-baselines/${baselineId}/publish`) {
+      publishRequestBody = requestBody
+      if (requestBody?.cause_code !== 'other' || typeof requestBody?.change_reason !== 'string' || requestBody.change_reason.length === 0) {
+        sendError(400, 'BASELINE_CHANGE_CAUSE_REQUIRED', 'structured publication cause required')
+        return
+      }
       baseline = { ...baseline, status: 'confirmed', version: 3 }
       send(200, baseline)
       return
@@ -1228,6 +1236,8 @@ test('ordinary staging user completes the full wizard and baseline smoke when ad
   assert.equal(accuracyRequestCount, 1)
   assert.equal(previewRequestCount, canonicalBusinessPreviewCases.length)
   assert.equal(commitRequestBody?.asyncGeneration, true)
+  assert.equal(publishRequestBody?.cause_code, 'other')
+  assert.match(publishRequestBody?.change_reason ?? '', /^User plan adjustment /u)
   assert.equal(generationStatusRequestCount, 3)
   const report = childReport
   assert.equal(report.status, 'pass')

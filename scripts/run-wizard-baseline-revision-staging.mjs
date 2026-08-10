@@ -1584,6 +1584,8 @@ try {
 
   const publishCall = await apiRequest('POST', `/api/task-baselines/${baselineId}/publish`, {
     version: readBack.version ?? null,
+    cause_code: 'other',
+    change_reason: noteAfter,
   })
   const published = assertApi('publish edited baseline', publishCall, [200])
   if (published?.status !== 'confirmed') throw new Error(`published baseline status is ${published?.status ?? 'missing'}`)
@@ -1592,6 +1594,8 @@ try {
     httpStatus: publishCall.response.status,
     baselineStatus: published.status,
     version: published.version ?? null,
+    causeCode: 'other',
+    changeReason: noteAfter,
   }
 
   const revisionIdempotencyKey = `${runId}-revision`
