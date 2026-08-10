@@ -26,6 +26,16 @@ import {
   type DurationMetricDto,
 } from './durationMetricService.js'
 
+const TASK_BASELINE_ITEM_JSON_COLUMNS = [
+  'scope_snapshot',
+  'wbs_snapshot',
+  'task_fact_snapshot',
+  'status_snapshot',
+  'seed_versions',
+  'manual_override_fields',
+  'generation_metadata',
+] as const
+
 export class PlanningRevisionPoolServiceError extends Error {
   code: 'NOT_FOUND' | 'VALIDATION_ERROR' | 'OBSERVATION_POOL_EMPTY' | 'INVALID_STATE'
   statusCode: number
@@ -833,7 +843,9 @@ export async function startRevisionFromBaseline(params: {
     } else {
       await insertRowReturning(client, 'task_baselines', baselineRow)
       if (clonedItems.length > 0) {
-        const insertedItems = await insertRowsReturning(client, 'task_baseline_items', clonedItems)
+        const insertedItems = await insertRowsReturning(client, 'task_baseline_items', clonedItems, {
+          jsonColumns: TASK_BASELINE_ITEM_JSON_COLUMNS,
+        })
         if (insertedItems.length !== clonedItems.length) {
           throw new PlanningRevisionPoolServiceError(
             'INVALID_STATE',

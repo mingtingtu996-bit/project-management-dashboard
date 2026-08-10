@@ -14,6 +14,18 @@ const smokeSource = fs.readFileSync(
   'utf8',
 )
 const smokeScriptPath = path.join(workspaceRoot, 'scripts', 'run-wizard-baseline-revision-staging.mjs')
+const deployWorkflowSource = fs.readFileSync(
+  path.join(workspaceRoot, '.github', 'workflows', 'deploy.yml'),
+  'utf8',
+)
+const productionLivegateSource = fs.readFileSync(
+  path.join(workspaceRoot, '.github', 'workflows', 'production-livegate-execution.yml'),
+  'utf8',
+)
+const stagingDiagnosticCleanupWorkflowSource = fs.readFileSync(
+  path.join(workspaceRoot, '.github', 'workflows', 'staging-wizard-diagnostic-cleanup.yml'),
+  'utf8',
+)
 
 const canonicalBusinessPreviewCases = [
   { businessType: 'general_civil', businessSubtype: 'civil_residential', markerPrefix: 'RMP-', rowCountRange: [98, 212], operationalRowFloor: 60 },
@@ -162,7 +174,57 @@ test('wizard baseline revision staging smoke can attest an exact deployed stagin
   assert.match(smokeSource, /newProjectId: undefined/)
   assert.match(smokeSource, /preallocated_project_id_readback_after_uncertain_create_response/)
   assert.match(smokeSource, /cleanup refused because the project diagnostic identity does not match/)
+  assert.match(smokeSource, /WORKBUDDY_DIAGNOSTIC_CLEANUP_DATABASE_URL/)
+  assert.match(smokeSource, /cleanupWizardDiagnosticProject/)
   assert.match(smokeSource, /writeResultReport\(\)/)
+  assert.match(
+    deployWorkflowSource,
+    /WORKBUDDY_DIAGNOSTIC_CLEANUP_DATABASE_URL: \$\{\{ secrets\.STAGING_SUPABASE_MIGRATION_URL \}\}/,
+  )
+  assert.match(
+    productionLivegateSource,
+    /WORKBUDDY_DIAGNOSTIC_CLEANUP_DATABASE_URL: \$\{\{ secrets\.PRODUCTION_SUPABASE_MIGRATION_URL \}\}/,
+  )
+})
+
+test('deployed wizard cleanup requires migration-backed physical deletion readback', () => {
+  const directCleanupIndex = smokeSource.indexOf(
+    'const directCleanup = await runMigrationBackedCleanup()',
+  )
+  const finalReadbackIndex = smokeSource.indexOf("const finalCleanupRead = await apiRequest('GET', `/api/projects/${targetProjectId}`)")
+  const apiDeleteIndex = smokeSource.indexOf(
+    "let deleteCall = await apiRequest(\n      'DELETE',",
+  )
+  const migrationCleanupBranch = smokeSource.slice(directCleanupIndex, apiDeleteIndex)
+
+  assert.ok(directCleanupIndex >= 0, 'expected migration-backed cleanup')
+  assert.ok(finalReadbackIndex > directCleanupIndex, 'API unreadability must be checked after direct cleanup')
+  assert.ok(apiDeleteIndex > finalReadbackIndex, 'guarded database deletion must precede any local-only API fallback')
+  assert.doesNotMatch(migrationCleanupBranch, /apiRequest\(\s*'DELETE'/)
+  assert.match(migrationCleanupBranch, /databaseProjectRefVerified/)
+  assert.match(migrationCleanupBranch, /return/)
+  assert.match(smokeSource, /deployed wizard cleanup requires WORKBUDDY_DIAGNOSTIC_CLEANUP_DATABASE_URL/)
+
+  const stagingSmokeStep = deployWorkflowSource.slice(
+    deployWorkflowSource.indexOf('- name: Run authenticated staging wizard and baseline smoke through SSH tunnel'),
+    deployWorkflowSource.indexOf('- name: Upload authenticated staging wizard smoke'),
+  )
+  const requiredNames = stagingSmokeStep.match(/for required_name in ([^;]+); do/)?.[1] ?? ''
+  assert.match(requiredNames, /WORKBUDDY_DIAGNOSTIC_CLEANUP_DATABASE_URL/)
+  assert.match(deployWorkflowSource, /Install authenticated smoke database cleanup dependencies[\s\S]+npm ci --workspaces=false --ignore-scripts --no-fund/)
+})
+
+test('staging can clean an explicitly approved prior wizard smoke artifact without expanding deploy inputs', () => {
+  assert.equal(deployWorkflowSource.includes('staging_wizard_residual_cleanup_run_id:'), false)
+  assert.match(stagingDiagnosticCleanupWorkflowSource, /source_run_id:/)
+  assert.match(stagingDiagnosticCleanupWorkflowSource, /release_sha:/)
+  assert.match(stagingDiagnosticCleanupWorkflowSource, /cleanup_confirmation:/)
+  assert.match(stagingDiagnosticCleanupWorkflowSource, /CLEANUP_DISPOSABLE_STAGING_WIZARD_RESIDUE/)
+  assert.match(stagingDiagnosticCleanupWorkflowSource, /environment: staging/)
+  assert.match(stagingDiagnosticCleanupWorkflowSource, /group: lighthouse-host-runtime-mutation/)
+  assert.match(stagingDiagnosticCleanupWorkflowSource, /actions\/download-artifact@v7[\s\S]+run-id: \$\{\{ inputs\.source_run_id \}\}/)
+  assert.match(stagingDiagnosticCleanupWorkflowSource, /--cleanup-report "\$source_smoke_report"/)
+  assert.match(stagingDiagnosticCleanupWorkflowSource, /staging-wizard-residual-cleanup\.json/)
 })
 
 test('wizard baseline revision smoke requires explicit same-SHA production identity and approval', async () => {
@@ -293,7 +355,13 @@ test('production wizard mutation fixture remains the approved one-building legac
       '--expected-project-ref', projectRef,
       '--release-sha', releaseSha,
       '--report', reportPath,
-    ], { cwd: workspaceRoot })
+    ], {
+      cwd: workspaceRoot,
+      env: {
+        ...process.env,
+        WORKBUDDY_DIAGNOSTIC_CLEANUP_DATABASE_URL: `postgresql://postgres.${projectRef}:secret@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres`,
+      },
+    })
     let stderr = ''
     child.stderr.on('data', (chunk) => { stderr += chunk })
     child.once('error', rejectChild)
@@ -409,7 +477,13 @@ test('wizard baseline revision smoke fails closed for unrecognized staging 403 a
         '--public-origin', 'https://workbuddy.example.com',
         '--report', reportPath,
         ...scenario.extraArgs,
-      ], { cwd: workspaceRoot })
+      ], {
+        cwd: workspaceRoot,
+        env: {
+          ...process.env,
+          WORKBUDDY_DIAGNOSTIC_CLEANUP_DATABASE_URL: `postgresql://postgres.${projectRef}:secret@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres`,
+        },
+      })
       let stderr = ''
       child.stderr.on('data', (chunk) => { stderr += chunk })
       child.once('error', rejectChild)
@@ -964,8 +1038,8 @@ test('wizard baseline revision staging smoke recovers and deletes a project when
   assert.equal(report.steps.previewCandidatePlan.naturalEndDate, null)
   assert.equal(report.steps.previewCandidatePlan.targetOvershootDays, null)
   assert.equal(report.steps.previewCandidatePlan.targetUnrecoverableDays, null)
-  assert.equal(report.cleanup.status, 'pass')
-  assert.equal(report.cleanup.projectPhysicallyDeleted, true)
+  assert.equal(report.cleanup.status, 'api_unreadable_unverified')
+  assert.equal(report.cleanup.projectPhysicallyDeleted, null)
   assert.equal(project, null)
 })
 
@@ -1318,8 +1392,8 @@ test('ordinary staging user completes the full wizard and baseline smoke when ad
   assert.equal(report.steps.publishBaseline.status, 'pass')
   assert.equal(report.steps.startRevision.status, 'pass')
   assert.equal(report.steps.rollbackRevisionDraft.status, 'pass')
-  assert.equal(report.cleanup.status, 'pass')
-  assert.equal(report.cleanup.projectPhysicallyDeleted, true)
+  assert.equal(report.cleanup.status, 'api_unreadable_unverified')
+  assert.equal(report.cleanup.projectPhysicallyDeleted, null)
   assert.equal(project, null)
 })
 
@@ -1475,8 +1549,8 @@ test('staging smoke fails closed and cleans up when async wizard generation fail
   assert.equal(report.steps.commitWizardGeneration.attemptId, generationAttemptId)
   assert.equal(report.steps.commitWizardGeneration.generationState, 'failed')
   assert.equal(report.steps.commitWizardGeneration.errorCode, 'EXECUTION_FACT_PERMISSION_DENIED')
-  assert.equal(report.cleanup.status, 'pass')
-  assert.equal(report.cleanup.projectPhysicallyDeleted, true)
+  assert.equal(report.cleanup.status, 'api_unreadable_unverified')
+  assert.equal(report.cleanup.projectPhysicallyDeleted, null)
   assert.equal(reportText.includes('sensitive postgres permission details'), false)
 
   generationStatusState = 'running'
@@ -1497,6 +1571,6 @@ test('staging smoke fails closed and cleans up when async wizard generation fail
   assert.equal(timeoutReport.steps.commitWizardGeneration.generationState, 'running')
   assert.equal(timeoutReport.steps.commitWizardGeneration.errorCode, 'WIZARD_GENERATION_TIMEOUT')
   assert.equal(timeoutReport.steps.commitWizardGeneration.generationPollCount, 2)
-  assert.equal(timeoutReport.cleanup.status, 'pass')
-  assert.equal(timeoutReport.cleanup.projectPhysicallyDeleted, true)
+  assert.equal(timeoutReport.cleanup.status, 'api_unreadable_unverified')
+  assert.equal(timeoutReport.cleanup.projectPhysicallyDeleted, null)
 })

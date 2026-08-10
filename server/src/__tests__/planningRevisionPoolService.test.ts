@@ -84,7 +84,12 @@ const state = vi.hoisted(() => {
     return { rows: [], rowCount: 0 }
   })
   const clientRelease = vi.fn()
-  const insertRowsReturning = vi.fn(async (_client: unknown, tableName: TableName, rows: Row[]) => {
+  const insertRowsReturning = vi.fn(async (
+    _client: unknown,
+    tableName: TableName,
+    rows: Row[],
+    _options?: { jsonColumns?: readonly string[] },
+  ) => {
     const inserted = clone(rows)
     tables[tableName].push(...inserted)
     return inserted
@@ -282,6 +287,13 @@ describe('planning revision pool service', () => {
         planned_end_date: '2026-04-05',
         mapping_status: 'mapped',
         sort_order: 1,
+        scope_snapshot: { building: 'A' },
+        wbs_snapshot: { path: ['A', '01'] },
+        task_fact_snapshot: { progress: 0 },
+        status_snapshot: { status: 'pending' },
+        seed_versions: [{ seed_version_id: 'seed-1' }],
+        manual_override_fields: ['planned_end_date'],
+        generation_metadata: { source: 'wizard' },
         created_at: '2026-04-01T00:00:00.000Z',
         updated_at: '2026-04-01T00:00:00.000Z',
       },
@@ -800,6 +812,17 @@ describe('planning revision pool service', () => {
       expect.arrayContaining([
         expect.objectContaining({ baseline_version_id: result.revision_id, project_id: 'project-1' }),
       ]),
+      {
+        jsonColumns: [
+          'scope_snapshot',
+          'wbs_snapshot',
+          'task_fact_snapshot',
+          'status_snapshot',
+          'seed_versions',
+          'manual_override_fields',
+          'generation_metadata',
+        ],
+      },
     )
     expect(state.writeLog).toHaveBeenCalledWith(
       expect.objectContaining({

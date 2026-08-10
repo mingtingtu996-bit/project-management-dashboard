@@ -1508,6 +1508,18 @@ jobs:
             echo "- Public HTTPS was not inferred from the private SSH tunnel."
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Setup Node.js 22 for authenticated smoke
+        if: ${{ steps.deployment-eligibility.outputs.can_deploy == 'true' && env.DEPLOY_TARGET == 'staging' }}
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install authenticated smoke database cleanup dependencies
+        if: ${{ steps.deployment-eligibility.outputs.can_deploy == 'true' && env.DEPLOY_TARGET == 'staging' }}
+        run: npm ci --workspaces=false --ignore-scripts --no-fund
+
       - name: Run authenticated staging wizard and baseline smoke through SSH tunnel
         id: staging-smoke
         if: ${{ steps.deployment-eligibility.outputs.can_deploy == 'true' && env.DEPLOY_TARGET == 'staging' }}
@@ -1521,9 +1533,10 @@ jobs:
           STAGING_SMOKE_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
           STAGING_SMOKE_TEST_USER_EMAIL: ${{ secrets.STAGING_TEST_USER_EMAIL }}
           STAGING_SMOKE_TEST_USER_PASSWORD: ${{ secrets.STAGING_TEST_USER_PASSWORD }}
+          WORKBUDDY_DIAGNOSTIC_CLEANUP_DATABASE_URL: ${{ secrets.STAGING_SUPABASE_MIGRATION_URL }}
         run: |
           set -euo pipefail
-          for required_name in DEPLOY_HEALTH_URL STAGING_SMOKE_SUPABASE_URL STAGING_SMOKE_TEST_USER_EMAIL STAGING_SMOKE_TEST_USER_PASSWORD; do
+          for required_name in DEPLOY_HEALTH_URL STAGING_SMOKE_SUPABASE_URL STAGING_SMOKE_TEST_USER_EMAIL STAGING_SMOKE_TEST_USER_PASSWORD WORKBUDDY_DIAGNOSTIC_CLEANUP_DATABASE_URL; do
             if [ -z "${!required_name}" ]; then
               echo "Missing required authenticated staging smoke secret: $required_name" >&2
               exit 1
@@ -1557,6 +1570,8 @@ jobs:
                 --public-origin "$public_origin" \
                 --cleanup-report "$smoke_report" \
                 --report "$smoke_cleanup_report" \
+                --deployed-staging-code \
+                --release-sha "$RELEASE_SHA" \
                 --request-timeout-ms 20000 \
                 || true
             fi

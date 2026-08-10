@@ -81,6 +81,7 @@ jobs:
           PRODUCTION_SUPABASE_URL: ${{ secrets.PRODUCTION_SUPABASE_URL }}
           PRODUCTION_TEST_USER_EMAIL: ${{ secrets.PRODUCTION_TEST_USER_EMAIL }}
           PRODUCTION_TEST_USER_PASSWORD: ${{ secrets.PRODUCTION_TEST_USER_PASSWORD }}
+          WORKBUDDY_DIAGNOSTIC_CLEANUP_DATABASE_URL: ${{ secrets.PRODUCTION_SUPABASE_MIGRATION_URL }}
           OUTPUT_ROOT: project-testing/reports/production-livegate-${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -88,7 +89,7 @@ jobs:
             echo "Explicit production mutation approval phrase is required." >&2
             exit 1
           fi
-          for required_name in DEPLOY_HOST DEPLOY_USER DEPLOY_PATH PRODUCTION_DEPLOY_HEALTH_URL PRODUCTION_SUPABASE_URL PRODUCTION_TEST_USER_EMAIL PRODUCTION_TEST_USER_PASSWORD; do
+          for required_name in DEPLOY_HOST DEPLOY_USER DEPLOY_PATH PRODUCTION_DEPLOY_HEALTH_URL PRODUCTION_SUPABASE_URL PRODUCTION_TEST_USER_EMAIL PRODUCTION_TEST_USER_PASSWORD WORKBUDDY_DIAGNOSTIC_CLEANUP_DATABASE_URL; do
             if [ -z "${!required_name}" ]; then
               echo "Missing required production smoke value: $required_name" >&2
               exit 1
@@ -184,6 +185,7 @@ jobs:
           PRODUCTION_SUPABASE_URL: ${{ secrets.PRODUCTION_SUPABASE_URL }}
           PRODUCTION_TEST_USER_EMAIL: ${{ secrets.PRODUCTION_TEST_USER_EMAIL }}
           PRODUCTION_TEST_USER_PASSWORD: ${{ secrets.PRODUCTION_TEST_USER_PASSWORD }}
+          WORKBUDDY_DIAGNOSTIC_CLEANUP_DATABASE_URL: ${{ secrets.PRODUCTION_SUPABASE_MIGRATION_URL }}
           OUTPUT_ROOT: project-testing/reports/production-livegate-${{ github.run_id }}
         run: |
           set -euo pipefail
