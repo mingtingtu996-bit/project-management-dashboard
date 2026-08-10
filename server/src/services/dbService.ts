@@ -1321,6 +1321,10 @@ function clearStructuredClosureOutcome(fields: Partial<Risk> | Partial<Issue>) {
   })
 }
 
+function serializeClosureEvidenceRefs(value: unknown) {
+  return JSON.stringify(value ?? [])
+}
+
 function normalizeDbChangeLogSource(source?: ChangeSource): DbChangeLogSource {
   if (source === 'manual_close_confirmation' || source === 'manual_keep_processing') {
     return 'manual_adjusted'
@@ -3278,7 +3282,7 @@ async function createRiskInTransaction(
       row.closure_result_code,
       row.closure_result_summary,
       row.closure_effectiveness,
-      row.closure_evidence_refs,
+      serializeClosureEvidenceRefs(row.closure_evidence_refs),
       row.closure_cause_attribution_id,
       row.closed_by,
       row.closure_recorded_at,
@@ -3376,7 +3380,9 @@ async function updateRiskInTransaction(
     value !== undefined && mutableColumns.has(column)
   ))
   const where = ['id = ?', 'project_id = ?']
-  const values = entries.map(([, value]) => value)
+  const values = entries.map(([column, value]) => (
+    column === 'closure_evidence_refs' ? serializeClosureEvidenceRefs(value) : value
+  ))
   values.push(id, oldRisk.project_id)
   if (expectedVersion !== undefined) {
     where.push('version = ?')
@@ -3879,7 +3885,7 @@ async function createIssueInTransaction(
       row.source_type, row.source_id, row.source_entity_type, row.source_entity_id,
       row.chain_id, row.severity, row.priority, row.pending_manual_close, row.status,
       row.closed_reason, row.closed_at, row.closure_result_code, row.closure_result_summary,
-      row.closure_effectiveness, row.closure_evidence_refs, row.closure_cause_attribution_id,
+      row.closure_effectiveness, serializeClosureEvidenceRefs(row.closure_evidence_refs), row.closure_cause_attribution_id,
       row.closed_by, row.closure_recorded_at, row.version, row.created_at, row.updated_at,
     ],
   )
@@ -3975,7 +3981,9 @@ async function updateIssueInTransaction(
       value !== undefined && mutableColumns.has(column)
     ))
     const where = ['id = ?', 'project_id = ?']
-    const values = entries.map(([, value]) => value)
+    const values = entries.map(([column, value]) => (
+      column === 'closure_evidence_refs' ? serializeClosureEvidenceRefs(value) : value
+    ))
     values.push(id, oldIssue.project_id)
     if (expectedVersion !== undefined) {
       where.push('version = ?')

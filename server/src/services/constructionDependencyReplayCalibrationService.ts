@@ -1499,9 +1499,10 @@ async function resolveReplayProjectCompanyId(
 ) {
   const explicit = normalizeNullableText(options.companyId)
   if (explicit) return explicit
-  const rows = options.queryExec
+  const result = options.queryExec
     ? await options.queryExec('SELECT company_id FROM public.projects WHERE id = $1::uuid LIMIT 1', [projectId])
     : await rawQuery('SELECT company_id FROM public.projects WHERE id = $1::uuid LIMIT 1', [projectId])
+  const rows = Array.isArray(result) ? result : result.rows
   const companyId = normalizeNullableText(rows[0]?.company_id)
   if (!companyId) {
     throw Object.assign(new Error('dependency replay project company authority is required'), {

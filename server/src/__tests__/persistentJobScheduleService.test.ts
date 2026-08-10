@@ -648,6 +648,50 @@ describe('persistent job schedule service', () => {
     second.stop()
   })
 
+  it('bounds normal wall-clock concurrency across different jobs', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 6, 13, 10, 59, 59, 0))
+    const coordinator = new PersistentJobCatchUpCoordinator(1)
+    const store = new MemorySlotStore()
+    const releases: Array<() => void> = []
+    let active = 0
+    let maxActive = 0
+    const execute = vi.fn(async () => {
+      active += 1
+      maxActive = Math.max(maxActive, active)
+      await new Promise<void>((resolve) => releases.push(resolve))
+      active -= 1
+    })
+    const buildTimer = (jobName: string) => new PersistentWallClockJobTimer({
+      jobName,
+      schedule: { kind: 'hourly', minute: 0 },
+      execute,
+      store,
+      catchUpCoordinator: coordinator,
+      catchUp: { limit: 1, maxAgeMs: 1 },
+    })
+
+    const first = buildTimer('firstNormalJob')
+    const second = buildTimer('secondNormalJob')
+    first.start()
+    second.start()
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    expect(execute).toHaveBeenCalledTimes(1)
+    expect(coordinator.getStatus()).toEqual({ concurrency: 1, active: 1, queued: 1 })
+
+    releases.shift()?.()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(execute).toHaveBeenCalledTimes(2)
+    expect(maxActive).toBe(1)
+
+    releases.shift()?.()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(coordinator.getStatus()).toEqual({ concurrency: 1, active: 0, queued: 0 })
+    first.stop()
+    second.stop()
+  })
+
   it('does not start a queued catch-up after its timer is stopped', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date(2026, 6, 13, 10, 5, 0, 0))

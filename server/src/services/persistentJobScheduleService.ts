@@ -817,11 +817,7 @@ export class PersistentWallClockJobTimer {
         )
       }
 
-      if (isCatchUp) {
-        await this.catchUpCoordinator.run(runSlot)
-        return
-      }
-      await runSlot()
+      await this.catchUpCoordinator.run(runSlot)
     })
     this.executionQueue = operation.catch(() => undefined)
     return operation

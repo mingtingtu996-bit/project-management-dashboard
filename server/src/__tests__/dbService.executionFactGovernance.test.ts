@@ -13,11 +13,18 @@ const state = vi.hoisted(() => {
   const transactionEvents: string[] = []
   const postCommitEffects: Array<() => Promise<void>> = []
 
+  const decodeDatabaseValue = (column: string, value: unknown) => {
+    if (column === 'closure_evidence_refs' && typeof value === 'string') {
+      return JSON.parse(value)
+    }
+    return value
+  }
+
   const applyUpdate = (row: Record<string, any>, sql: string, params: unknown[]) => {
     const setClause = sql.match(/set\s+(.+?)\s+where/is)?.[1] ?? ''
     const columns = [...setClause.matchAll(/([a-z_]+)\s*=\s*\$\d+/gi)].map((match) => match[1])
     columns.forEach((column, index) => {
-      row[column] = params[index]
+      row[column] = decodeDatabaseValue(column, params[index])
     })
   }
 
@@ -72,7 +79,7 @@ const state = vi.hoisted(() => {
       risk = {
         id: params[0], project_id: params[1], task_id: params[2], title: params[3],
         status: params[6], closure_result_code: params[24], closure_result_summary: params[25],
-        closure_effectiveness: params[26], closure_evidence_refs: params[27],
+        closure_effectiveness: params[26], closure_evidence_refs: decodeDatabaseValue('closure_evidence_refs', params[27]),
         closure_cause_attribution_id: params[28], closed_by: params[29],
         closure_recorded_at: params[30], version: params[31], created_at: params[32], updated_at: params[33],
       }
@@ -83,7 +90,7 @@ const state = vi.hoisted(() => {
         id: params[0], project_id: params[1], task_id: params[2], title: params[3],
         source_type: params[5], severity: params[10], priority: params[11],
         status: params[13], closure_result_code: params[16], closure_result_summary: params[17],
-        closure_effectiveness: params[18], closure_evidence_refs: params[19],
+        closure_effectiveness: params[18], closure_evidence_refs: decodeDatabaseValue('closure_evidence_refs', params[19]),
         closure_cause_attribution_id: params[20], closed_by: params[21],
         closure_recorded_at: params[22], version: params[23], created_at: params[24], updated_at: params[25],
       }

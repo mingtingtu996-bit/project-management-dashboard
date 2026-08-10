@@ -9,11 +9,35 @@ import {
   collectAndPersistConstructionDependencyReplayCalibrationCandidates,
   collectConstructionDependencyReplayCalibrationReport,
   evaluateConstructionDependencyRuleCandidateLiveLearningEvidence,
+  persistConstructionDependencyReplayCalibrationCandidatesFromReport,
 } from '../services/constructionDependencyReplayCalibrationService.js'
 
 const serviceSourcePath = fileURLToPath(new URL('../services/constructionDependencyReplayCalibrationService.ts', import.meta.url))
 
 describe('construction dependency replay calibration service', () => {
+  it('accepts a PostgreSQL QueryResult when resolving replay project company authority', async () => {
+    const projectId = '10000000-0000-4000-8000-000000000010'
+    const companyId = '10000000-0000-4000-8000-000000000001'
+    const report = await collectConstructionDependencyReplayCalibrationReport({
+      projectIds: [projectId],
+      queryRows: async <T = Record<string, unknown>>(): Promise<T[]> => [] as T[],
+    })
+    const queryExec = async (sql: string) => ({
+      rows: sql.toLowerCase().includes('from public.projects')
+        ? [{ company_id: companyId }]
+        : [],
+    })
+
+    await expect(persistConstructionDependencyReplayCalibrationCandidatesFromReport({
+      report,
+      projectId,
+      queryExec: queryExec as any,
+    })).resolves.toMatchObject({
+      persistedEventCount: 0,
+      recordedOutcomeCount: 0,
+    })
+  })
+
   it('keeps production replay sampling and outcome writes on fixed SQL literals', () => {
     const source = readFileSync(serviceSourcePath, 'utf8')
 

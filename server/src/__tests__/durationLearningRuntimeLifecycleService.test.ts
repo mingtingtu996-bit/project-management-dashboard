@@ -1298,6 +1298,35 @@ describe('durationLearningRuntimeLifecycleService', () => {
     expect(candidateSqls.some((sql) => sql.includes('duration_learning_runtime_publications'))).toBe(true)
   })
 
+  it('parenthesizes JSON extraction before concatenating critical-path evidence refs', async () => {
+    const candidateSqls: string[] = []
+    await collectDurationLearningRuntimeCandidateProposals(async <T = Record<string, unknown>>(
+      sql: string,
+    ): Promise<T[]> => {
+      candidateSqls.push(sql)
+      return [] as T[]
+    })
+
+    const monitoringSqls: string[] = []
+    await collectDurationLearningRuntimeMonitoringCandidates(async <T = Record<string, unknown>>(
+      sql: string,
+    ): Promise<T[]> => {
+      monitoringSqls.push(sql)
+      return [] as T[]
+    })
+
+    const collectorSql = [...candidateSqls, ...monitoringSqls].join('\n')
+    expect(collectorSql).toContain(
+      "'critical_path_inputs:' || (outcome.metadata ->> 'critical_path_input_hash')",
+    )
+    expect(collectorSql).toContain(
+      "'critical_path_inputs:' || (source.metadata ->> 'critical_path_input_hash')",
+    )
+    expect(collectorSql).not.toMatch(
+      /'critical_path_inputs:'\s*\|\|\s*(?:outcome|source)\.metadata\s*->>/u,
+    )
+  })
+
   it('uses schema-real wizard business classification and project-owned company authority in every collector CTE', async () => {
     const calls: string[] = []
     const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> => {

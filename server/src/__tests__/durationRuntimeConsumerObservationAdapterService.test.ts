@@ -13,7 +13,56 @@ function callsForTable(calls: Array<{ sql: string, params: unknown[] }>, tableNa
   return calls.filter((call) => call.sql.toLowerCase().includes(tableName))
 }
 
+function parseJsonParam<T>(call: { params: unknown[] } | undefined, index: number): T {
+  return JSON.parse(String(call?.params[index] ?? 'null')) as T
+}
+
 describe('durationRuntimeConsumerObservationAdapterService', () => {
+  it('serializes critical-path observation JSONB before invoking a raw query executor', async () => {
+    const {
+      recordProjectCriticalPathConsumedArtifacts,
+    } = await import('../services/durationRuntimeConsumerObservationAdapterService.js')
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    await recordProjectCriticalPathConsumedArtifacts({
+      queryExec,
+      observedAt: '2026-08-10T04:00:00.000Z',
+      callContext: { projectId: 'project-critical-path' },
+      sourceEvidenceRefs: ['critical_path_inputs:sha256:critical-path-input'],
+      artifacts: [{
+        assetKey: 'critical_path_rule_candidate',
+        publicationKey: 'duration_learning_runtime:critical_path_rule_candidate:critical-path-v1',
+        publicationStatus: 'runtime_published',
+        observationContext: { projectId: 'project-critical-path' },
+        sourceEvidenceRefs: ['duration_learning_runtime_publications:critical-path-v1'],
+      }],
+    })
+
+    const runtimeCall = callsForTable(calls, 'runtime_consumer_runtime_calls')[0]
+    expect(runtimeCall?.sql).toContain('$4::jsonb')
+    expect(runtimeCall?.sql).toContain('$5::jsonb')
+    expect(runtimeCall?.params[3]).toBe(JSON.stringify({
+      projectId: 'project-critical-path',
+      runtimeAssetMode: 'published_artifact',
+      runtimeArtifactCount: 1,
+      runtimeArtifactPublicationKeys: [
+        'duration_learning_runtime:critical_path_rule_candidate:critical-path-v1',
+      ],
+    }))
+    expect(runtimeCall?.params[4]).toBe(JSON.stringify([
+      'critical_path_inputs:sha256:critical-path-input',
+    ]))
+
+    const observation = callsForTable(calls, 'runtime_consumer_observations')[0]
+    expect(observation?.sql).toContain('$6::jsonb')
+    expect(observation?.sql).toContain('$7::jsonb')
+    expect(observation?.params[5]).toBe(JSON.stringify({ projectId: 'project-critical-path' }))
+    expect(observation?.params[6]).toBe(JSON.stringify([
+      'critical_path_inputs:sha256:critical-path-input',
+      'duration_learning_runtime_publications:critical-path-v1',
+    ]))
+  })
+
   it('records a reasoned call-only entry when the consumer has no published artifacts', async () => {
     const {
       recordProjectRemainingDurationForecastConsumedArtifacts,
@@ -29,7 +78,7 @@ describe('durationRuntimeConsumerObservationAdapterService', () => {
 
     const runtimeCalls = callsForTable(calls, 'runtime_consumer_runtime_calls')
     expect(runtimeCalls).toHaveLength(1)
-    expect(runtimeCalls[0]?.params[3]).toEqual(expect.objectContaining({
+    expect(parseJsonParam(runtimeCalls[0], 3)).toEqual(expect.objectContaining({
       projectId: 'project-a',
       runtimeAssetMode: 'no_published_artifact',
       runtimeArtifactCount: 0,
@@ -81,7 +130,7 @@ describe('durationRuntimeConsumerObservationAdapterService', () => {
       'projectRemainingDurationForecastService',
       'projectRemainingDurationForecastService:buildProjectRemainingDurationForecast',
     ])
-    expect(callsForTable(calls, 'runtime_consumer_runtime_calls')[0].params[3]).toEqual(expect.objectContaining({
+    expect(parseJsonParam(callsForTable(calls, 'runtime_consumer_runtime_calls')[0], 3)).toEqual(expect.objectContaining({
       runtimeAssetMode: 'published_artifact',
       runtimeArtifactCount: 2,
       runtimeArtifactPublicationKeys: [
@@ -89,7 +138,7 @@ describe('durationRuntimeConsumerObservationAdapterService', () => {
         'forecast_residual_overlay_runtime:overlay-v4',
       ],
     }))
-    expect(callsForTable(calls, 'runtime_consumer_runtime_calls')[0].params[4]).toEqual([
+    expect(parseJsonParam(callsForTable(calls, 'runtime_consumer_runtime_calls')[0], 4)).toEqual([
       'project_remaining_forecast:project-a:2026-06-30',
     ])
     expect(callsForTable(calls, 'runtime_consumer_observations').map((call) => call.params.slice(0, 4))).toEqual([
@@ -106,7 +155,7 @@ describe('durationRuntimeConsumerObservationAdapterService', () => {
         'remaining_duration_forecast',
       ],
     ])
-    expect(callsForTable(calls, 'runtime_consumer_observations').map((call) => call.params[6])).toEqual([
+    expect(callsForTable(calls, 'runtime_consumer_observations').map((call) => parseJsonParam(call, 6))).toEqual([
       [
         'project_remaining_forecast:project-a:2026-06-30',
         'artifact-lineage:overlay-v4',

@@ -7,6 +7,10 @@ import {
   recordConstructionOrganizationPlanNetworkSavedOutcome,
 } from '../services/constructionOrganizationPlanNetworkRuntimeEvidenceService.js'
 
+function parseJsonParam<T>(call: { params: unknown[] }, index: number): T {
+  return JSON.parse(String(call.params[index] ?? 'null')) as T
+}
+
 describe('constructionOrganizationPlanNetworkRuntimeEvidenceService', () => {
   it('records impact monitoring evidence for a published construction organization plan network without runtime writes', async () => {
     const calls: Array<{ sql: string, params: unknown[] }> = []
@@ -428,38 +432,46 @@ describe('constructionOrganizationPlanNetworkRuntimeEvidenceService', () => {
     }))
     expect(calls).toHaveLength(2)
     expect(calls[0].sql).toContain('insert into public.runtime_consumer_runtime_calls')
-    expect(calls[0].params).toEqual([
+    expect(calls[0].params.slice(0, 3)).toEqual([
       'projectWizard',
       'projectWizard:commitWizardGeneration',
       'called',
-      expect.objectContaining({
-        projectId: 'project-1',
-        runtimeAssetMode: 'published_artifact',
-        runtimeArtifactCount: 1,
-      }),
-      ['project_wizard_commit:project-1:generation-1:newProjectPlanning'],
+    ])
+    expect(parseJsonParam(calls[0], 3)).toEqual(expect.objectContaining({
+      projectId: 'project-1',
+      runtimeAssetMode: 'published_artifact',
+      runtimeArtifactCount: 1,
+    }))
+    expect(parseJsonParam(calls[0], 4)).toEqual([
+      'project_wizard_commit:project-1:generation-1:newProjectPlanning',
+    ])
+    expect(calls[0].params.slice(5)).toEqual([
       false,
       false,
       '2026-06-22T06:00:00.000Z',
     ])
     expect(calls[1].sql).toContain('insert into public.runtime_consumer_observations')
-    expect(calls[1].params).toEqual([
+    expect(calls[1].params.slice(0, 5)).toEqual([
       'construction_organization_plan_network',
       'construction_org_plan_network_runtime:project-1:option-ready',
       'projectWizard',
       'project_wizard_commit',
       'observed',
-      expect.objectContaining({
-        source: 'construction_organization_plan_network_runtime_evidence_service',
-        businessType: 'hospital',
-        useCase: 'newProjectPlanning',
-        projectId: 'project-1',
-        optionId: 'option-ready',
-        draftNetworkKey: 'draft-network-ready',
-        writesTaskDependencies: false,
-        writesPlanDates: false,
-      }),
-      ['project_wizard_commit:project-1:generation-1:newProjectPlanning'],
+    ])
+    expect(parseJsonParam(calls[1], 5)).toEqual(expect.objectContaining({
+      source: 'construction_organization_plan_network_runtime_evidence_service',
+      businessType: 'hospital',
+      useCase: 'newProjectPlanning',
+      projectId: 'project-1',
+      optionId: 'option-ready',
+      draftNetworkKey: 'draft-network-ready',
+      writesTaskDependencies: false,
+      writesPlanDates: false,
+    }))
+    expect(parseJsonParam(calls[1], 6)).toEqual([
+      'project_wizard_commit:project-1:generation-1:newProjectPlanning',
+    ])
+    expect(calls[1].params.slice(7)).toEqual([
       false,
       false,
       '2026-06-22T06:00:00.000Z',
@@ -505,7 +517,7 @@ describe('constructionOrganizationPlanNetworkRuntimeEvidenceService', () => {
 
     expect(calls).toHaveLength(1)
     expect(calls[0].sql).toContain('insert into public.runtime_consumer_runtime_calls')
-    expect(calls[0].params[3]).toEqual(expect.objectContaining({
+    expect(parseJsonParam(calls[0], 3)).toEqual(expect.objectContaining({
       projectId: 'project-1',
       runtimeAssetMode: 'no_published_artifact',
       runtimeArtifactCount: 0,

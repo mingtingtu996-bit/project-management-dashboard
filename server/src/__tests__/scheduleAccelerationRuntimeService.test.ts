@@ -254,6 +254,10 @@ function callsForTable(calls: Array<{ sql: string, params: unknown[] }>, tableNa
   return calls.filter((call) => call.sql.toLowerCase().includes(tableName))
 }
 
+function parseJsonParam<T>(call: { params: unknown[] } | undefined, index: number): T {
+  return JSON.parse(String(call?.params[index] ?? 'null')) as T
+}
+
 function identifiedConstructionCalendar() {
   return {
     basis: 'official_construction_calendar_seed' as const,
@@ -1963,37 +1967,40 @@ describe('scheduleAccelerationRuntimeService', () => {
     const runtimeCall = observationCalls.find((call) => call.sql.includes('runtime_consumer_runtime_calls'))
     const observation = observationCalls.find((call) => call.sql.includes('runtime_consumer_observations'))
 
-    expect(runtimeCall?.params).toEqual(expect.arrayContaining([
+    expect(runtimeCall?.params.slice(0, 3)).toEqual([
       'scheduleAccelerationRuntimeService',
       'scheduleAccelerationRuntimeService:recordScheduleAccelerationRecommendationAdoption',
-      expect.objectContaining({
-        projectId: 'project-1',
-        runtimeConsumer: 'scheduleAccelerationRuntimeService',
-        consumerTrigger: 'schedule_acceleration_recommendation_adoption',
-      }),
-    ]))
-    expect(observation?.params).toEqual(expect.arrayContaining([
+      'called',
+    ])
+    expect(parseJsonParam(runtimeCall, 3)).toEqual(expect.objectContaining({
+      projectId: 'project-1',
+      runtimeConsumer: 'scheduleAccelerationRuntimeService',
+      consumerTrigger: 'schedule_acceleration_recommendation_adoption',
+    }))
+    expect(observation?.params.slice(0, 5)).toEqual([
       'construction_organization_plan_network',
       'construction_org_plan_network_runtime:project-1:accelerate-tower-first',
       'scheduleAccelerationRuntimeService',
       'schedule_acceleration_runtime',
       'observed',
-      expect.objectContaining({
-        projectId: 'project-1',
-        businessType: 'general_civil',
-        useCase: 'accelerationRecovery',
-        optionId: 'option-accelerate-tower-first',
-        outcomeRef: 'task-list-commit:project-1:task-commit-request-1:acceleration-reschedule',
-        outcomeSource: 'schedule_acceleration_reschedule_commit',
-      }),
-      expect.arrayContaining([
-        'schedule_acceleration_adoption:project-1',
-        'duration_plan_network_outcomes:construction_org_plan_network_runtime:project-1:accelerate-tower-first',
-      ]),
+    ])
+    expect(parseJsonParam(observation, 5)).toEqual(expect.objectContaining({
+      projectId: 'project-1',
+      businessType: 'general_civil',
+      useCase: 'accelerationRecovery',
+      optionId: 'option-accelerate-tower-first',
+      outcomeRef: 'task-list-commit:project-1:task-commit-request-1:acceleration-reschedule',
+      outcomeSource: 'schedule_acceleration_reschedule_commit',
+    }))
+    expect(parseJsonParam(observation, 6)).toEqual(expect.arrayContaining([
+      'schedule_acceleration_adoption:project-1',
+      'duration_plan_network_outcomes:construction_org_plan_network_runtime:project-1:accelerate-tower-first',
+    ]))
+    expect(observation?.params.slice(7)).toEqual([
       false,
       false,
       '2027-02-15T00:00:00.000Z',
-    ]))
+    ])
   })
 
   it('does not fabricate a construction organization saved outcome without published plan-network identity', async () => {
@@ -3092,16 +3099,16 @@ describe('scheduleAccelerationRuntimeService', () => {
       ],
     ])
     const runtimeCall = runtimeCalls.find((call) => call.params[0] === 'scheduleAccelerationRuntimeService')
-    expect(runtimeCall?.params[4]).toEqual(expect.arrayContaining([
+    expect(parseJsonParam(runtimeCall, 4)).toEqual(expect.arrayContaining([
       'schedule_acceleration_runtime:project-1',
       'duration_input_assembly:project-1:schedule_acceleration',
     ]))
     const runtimeObservation = observations.find((call) => call.params[2] === 'scheduleAccelerationRuntimeService')
-    expect(runtimeObservation?.params[5]).toEqual(expect.objectContaining({
+    expect(parseJsonParam(runtimeObservation, 5)).toEqual(expect.objectContaining({
       projectId: 'project-1',
       runtimeConsumer: 'scheduleAccelerationRuntimeService',
     }))
-    expect(runtimeObservation?.params[6]).toEqual(expect.arrayContaining([
+    expect(parseJsonParam(runtimeObservation, 6)).toEqual(expect.arrayContaining([
       'schedule_acceleration_runtime:project-1',
       'duration_input_assembly:project-1:schedule_acceleration',
     ]))
@@ -3150,11 +3157,11 @@ describe('scheduleAccelerationRuntimeService', () => {
     expect(runtimeCalls).toHaveLength(3)
     expect(callsForTable(calls, 'runtime_consumer_observations')).toHaveLength(0)
     const runtimeCall = runtimeCalls.find((call) => call.params[0] === 'scheduleAccelerationRuntimeService')
-    expect(runtimeCall?.params[3]).toEqual(expect.objectContaining({
+    expect(parseJsonParam(runtimeCall, 3)).toEqual(expect.objectContaining({
       runtimeAssetMode: 'no_published_artifact',
       runtimeArtifactCount: 0,
     }))
-    expect(runtimeCall?.params[4]).toEqual(expect.arrayContaining([
+    expect(parseJsonParam(runtimeCall, 4)).toEqual(expect.arrayContaining([
       'schedule_acceleration_runtime:project-1',
       'duration_input_assembly:project-1:schedule_acceleration',
     ]))
@@ -3415,10 +3422,10 @@ describe('scheduleAccelerationRuntimeService', () => {
     ])
     expect(callsForTable(calls, 'runtime_consumer_observations')).toHaveLength(0)
     const runtimeCall = runtimeCalls.find((call) => call.params[0] === 'scheduleAccelerationRuntimeService')
-    expect(runtimeCall?.params[3]).toEqual(expect.objectContaining({
+    expect(parseJsonParam(runtimeCall, 3)).toEqual(expect.objectContaining({
       runtimeAssetMode: 'no_published_artifact',
       runtimeArtifactCount: 0,
     }))
-    expect(runtimeCall?.params[4]).toEqual(['schedule_acceleration_runtime:project-1'])
+    expect(parseJsonParam(runtimeCall, 4)).toEqual(['schedule_acceleration_runtime:project-1'])
   })
 })

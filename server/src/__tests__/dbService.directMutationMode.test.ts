@@ -43,6 +43,7 @@ const {
   getTask,
   getTasks,
   updateIssue,
+  updateRisk,
 } = await import('../services/dbService.js')
 
 beforeEach(() => {
@@ -108,8 +109,124 @@ it('creates and reads risks through the backend database role', async () => {
 
   expect(result).toMatchObject({ project_id: 'project-1', title: 'Controlled staging risk' })
   expect(String(mocks.rawQuery.mock.calls[0][0])).toContain('INSERT INTO risks')
+  expect(mocks.rawQuery.mock.calls[0][1][27]).toBe('[]')
   expect(String(mocks.rawQuery.mock.calls[1][0])).toContain('SELECT * FROM risks WHERE id = $1 LIMIT 1')
   expect(mocks.from).not.toHaveBeenCalled()
+})
+
+it('serializes issue closure evidence as JSONB during direct creation', async () => {
+  const createdIssue = {
+    id: 'issue-1',
+    project_id: 'project-1',
+    title: 'Controlled staging issue',
+    source_type: 'manual',
+    severity: 'medium',
+    priority: 30,
+    status: 'open',
+    version: 1,
+    created_at: '2026-08-10T04:00:00.000Z',
+    updated_at: '2026-08-10T04:00:00.000Z',
+  }
+  mocks.rawQuery
+    .mockResolvedValueOnce({ rows: [] })
+    .mockResolvedValueOnce({ rows: [createdIssue] })
+    .mockResolvedValueOnce({ rows: [] })
+
+  await expect(createIssue({
+    project_id: 'project-1',
+    title: 'Controlled staging issue',
+    source_type: 'manual',
+  } as any)).resolves.toMatchObject({ id: 'issue-1' })
+
+  const insertCall = mocks.rawQuery.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO issues'))
+  expect(insertCall?.[1][19]).toBe('[]')
+})
+
+it('serializes risk closure evidence as JSONB during direct updates', async () => {
+  const oldRisk = {
+    id: 'risk-1',
+    project_id: 'project-1',
+    title: 'Closable risk',
+    status: 'mitigating',
+    pending_manual_close: false,
+    version: 1,
+    created_at: '2026-08-09T04:00:00.000Z',
+    updated_at: '2026-08-09T04:00:00.000Z',
+  }
+  const updatedRisk = {
+    ...oldRisk,
+    status: 'closed',
+    closure_evidence_refs: ['inspection:risk-1'],
+    version: 2,
+    updated_at: '2026-08-10T04:00:00.000Z',
+  }
+  mocks.rawQuery.mockImplementation(async (sql: string) => {
+    const normalized = sql.toLowerCase()
+    if (normalized.includes('select * from risks') && normalized.includes('for update')) {
+      return { rows: [oldRisk] }
+    }
+    if (normalized.includes('update risks set')) return { rows: [{ id: 'risk-1' }] }
+    if (normalized.includes('select * from risks')) return { rows: [updatedRisk] }
+    return { rows: [] }
+  })
+
+  await updateRisk('risk-1', {
+    status: 'closed',
+    closure_result_code: 'resolved',
+    closure_result_summary: 'Verified corrective work.',
+    closure_effectiveness: 'resolved',
+    closure_evidence_refs: ['inspection:risk-1'],
+    closure_recorded_at: '2026-08-10T04:00:00.000Z',
+  } as any, 1)
+
+  const updateCall = mocks.rawQuery.mock.calls.find(([sql]) => String(sql).includes('UPDATE risks SET'))
+  expect(updateCall?.[1]).toContain(JSON.stringify(['inspection:risk-1']))
+  expect(updateCall?.[1]).not.toContainEqual(['inspection:risk-1'])
+})
+
+it('serializes issue closure evidence as JSONB during direct updates', async () => {
+  const oldIssue = {
+    id: 'issue-1',
+    project_id: 'project-1',
+    title: 'Closable issue',
+    source_type: 'manual',
+    severity: 'medium',
+    priority: 30,
+    status: 'resolved',
+    pending_manual_close: false,
+    version: 1,
+    created_at: '2026-08-09T04:00:00.000Z',
+    updated_at: '2026-08-09T04:00:00.000Z',
+  }
+  const updatedIssue = {
+    ...oldIssue,
+    status: 'closed',
+    closure_evidence_refs: ['inspection:issue-1'],
+    version: 2,
+    updated_at: '2026-08-10T04:00:00.000Z',
+  }
+  mocks.rawQuery.mockImplementation(async (sql: string) => {
+    const normalized = sql.toLowerCase()
+    if (normalized.includes('select * from issues') && normalized.includes('for update')) {
+      return { rows: [oldIssue] }
+    }
+    if (normalized.includes('update issues set')) return { rows: [{ id: 'issue-1' }] }
+    if (normalized.includes('select * from issues')) return { rows: [updatedIssue] }
+    return { rows: [] }
+  })
+
+  await updateIssue('issue-1', {
+    status: 'closed',
+    closure_result_code: 'resolved',
+    closure_result_summary: 'Verified corrective work.',
+    closure_effectiveness: 'resolved',
+    closure_evidence_refs: ['inspection:issue-1'],
+    closure_recorded_at: '2026-08-10T04:00:00.000Z',
+  } as any, 1)
+
+  const updateCall = mocks.rawQuery.mock.calls.find(([sql]) => String(sql).includes('UPDATE issues SET'))
+  expect(updateCall?.[1]).toContain(JSON.stringify(['inspection:issue-1']))
+  expect(updateCall?.[1]).not.toContainEqual(['inspection:issue-1'])
 })
 
 it('deletes unlinked risks through the backend database role', async () => {
