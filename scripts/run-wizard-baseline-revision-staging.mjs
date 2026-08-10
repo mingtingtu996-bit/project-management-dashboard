@@ -1553,19 +1553,35 @@ try {
   const adjustedItemId = requireValue(baselineItems[0]?.id, 'adjusted item id')
   const noteBefore = String(baselineItems[0]?.notes ?? '')
   const noteAfter = `User plan adjustment ${runId}`
-  const adjustedItems = baselineItems.map((item, index) => index === 0 ? { ...item, notes: noteAfter } : item)
-  const saveCall = await apiRequest('PUT', `/api/task-baselines/${baselineId}`, {
-    title: baseline.title,
-    description: baseline.description ?? null,
-    effective_from: baseline.effective_from ?? null,
-    effective_to: baseline.effective_to ?? null,
-    items: adjustedItems,
+  const fieldRegistryCall = await apiRequest(
+    'GET',
+    `/api/planning/field-registry?projectId=${encodeURIComponent(projectId)}&surface=baseline`,
+  )
+  const fieldRegistry = assertApi('read baseline field registry', fieldRegistryCall, [200])
+  const fieldRegistryVersion = requireValue(fieldRegistry?.registryVersion, 'baseline field registry version')
+  result.steps.baselineFieldRegistryReadback = {
+    status: 'pass',
+    httpStatus: fieldRegistryCall.response.status,
+    fieldRegistryVersion,
+  }
+
+  const saveCall = await apiRequest('POST', `/api/task-baselines/${baselineId}/commit`, {
+    projectId,
+    surface: 'baseline',
+    resourceId: baselineId,
+    baseVersion: baseline.version ?? undefined,
+    fieldRegistryVersion,
+    operations: [{
+      type: 'update_row',
+      rowId: adjustedItemId,
+      values: { notes: noteAfter },
+    }],
   })
   const saved = assertApi('save plan adjustment', saveCall, [200])
   result.steps.savePlanAdjustment = {
     status: 'pass',
     httpStatus: saveCall.response.status,
-    itemCount: saved?.items?.length ?? null,
+    itemCount: Array.isArray(saved?.rows) ? saved.rows.length : null,
     adjustedItemId,
     noteBefore,
     noteAfter,

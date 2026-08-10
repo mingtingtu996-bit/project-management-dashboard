@@ -984,6 +984,8 @@ test('ordinary staging user completes the full wizard and baseline smoke when ad
   let previewRequestCount = 0
   let generationStatusRequestCount = 0
   let commitRequestBody = null
+  let baselineCommitRequestBody = null
+  let legacyBaselinePutCount = 0
   let publishRequestBody = null
   let baseline = {
     id: baselineId,
@@ -1136,12 +1138,51 @@ test('ordinary staging user completes the full wizard and baseline smoke when ad
       })
       return
     }
+    if (req.method === 'GET' && requestUrl.pathname === '/api/planning/field-registry') {
+      assert.equal(requestUrl.searchParams.get('projectId'), projectId)
+      assert.equal(requestUrl.searchParams.get('surface'), 'baseline')
+      send(200, {
+        registryVersion: 'v1.4.7.6',
+        surface: 'baseline',
+        generatedAt: '2026-08-05T00:00:00.000Z',
+        updatedAt: '2026-08-05T00:00:00.000Z',
+        groups: [],
+        fields: [],
+      })
+      return
+    }
+    if (req.method === 'POST' && requestUrl.pathname === `/api/task-baselines/${baselineId}/commit`) {
+      baselineCommitRequestBody = requestBody
+      const noteOperation = requestBody?.operations?.find((operation) => (
+        operation?.type === 'update_row' && operation?.rowId === 'baseline-item-1'
+      ))
+      baseline = {
+        ...baseline,
+        version: 2,
+        items: baseline.items.map((item) => (
+          item.id === noteOperation?.rowId
+            ? { ...item, ...noteOperation.values }
+            : item
+        )),
+      }
+      send(200, {
+        surface: 'baseline',
+        resourceId: baselineId,
+        rows: baseline.items,
+        revision: 2,
+        createdRowCount: 0,
+        deletedRowCount: 0,
+        changedRowCount: requestBody?.operations?.length ?? 0,
+      })
+      return
+    }
     if (requestUrl.pathname === `/api/task-baselines/${baselineId}`) {
       if (req.method === 'GET') {
         send(200, baseline)
         return
       }
       if (req.method === 'PUT') {
+        legacyBaselinePutCount += 1
         baseline = { ...baseline, ...requestBody, version: 2 }
         send(200, baseline)
         return
@@ -1236,6 +1277,17 @@ test('ordinary staging user completes the full wizard and baseline smoke when ad
   assert.equal(accuracyRequestCount, 1)
   assert.equal(previewRequestCount, canonicalBusinessPreviewCases.length)
   assert.equal(commitRequestBody?.asyncGeneration, true)
+  assert.equal(legacyBaselinePutCount, 0)
+  assert.equal(baselineCommitRequestBody?.projectId, projectId)
+  assert.equal(baselineCommitRequestBody?.surface, 'baseline')
+  assert.equal(baselineCommitRequestBody?.resourceId, baselineId)
+  assert.equal(baselineCommitRequestBody?.fieldRegistryVersion, 'v1.4.7.6')
+  assert.deepEqual(baselineCommitRequestBody?.operations, [{
+    type: 'update_row',
+    rowId: 'baseline-item-1',
+    values: { notes: baseline.items[0].notes },
+  }])
+  assert.equal(Object.hasOwn(baselineCommitRequestBody?.clientContext ?? {}, 'rollupRows'), false)
   assert.equal(publishRequestBody?.cause_code, 'other')
   assert.match(publishRequestBody?.change_reason ?? '', /^User plan adjustment /u)
   assert.equal(generationStatusRequestCount, 3)
