@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 
 import { resolvePublicHttpsOrigin } from './public-origin.mjs'
+import { cleanupWizardDiagnosticProject } from './wizard-diagnostic-project-cleanup.mjs'
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 const workspaceRoot = path.resolve(scriptDir, '..')
@@ -113,6 +114,13 @@ const supabaseUrl = requireValue(env.SUPABASE_URL, 'SUPABASE_URL')
 const supabaseProjectRef = new URL(supabaseUrl).hostname.split('.')[0].toLowerCase()
 const expectedProjectRefInput = String(args.get('expected-project-ref') ?? '').trim().toLowerCase()
 const expectedProjectRef = expectedProjectRefInput || supabaseProjectRef
+const diagnosticCleanupDatabaseUrl = String(
+  process.env.WORKBUDDY_DIAGNOSTIC_CLEANUP_DATABASE_URL ?? '',
+).trim()
+const migrationBackedCleanupRequired = deployedStagingCode || productionLive
+if (migrationBackedCleanupRequired && !diagnosticCleanupDatabaseUrl) {
+  throw new Error('deployed wizard cleanup requires WORKBUDDY_DIAGNOSTIC_CLEANUP_DATABASE_URL')
+}
 if ((productionLive || deployedStagingCode || expectedProjectRefInput)
   && !/^[a-z0-9]{20}$/.test(expectedProjectRef)) {
   throw new Error('expected-project-ref must be a 20-character Supabase project ref')
@@ -519,7 +527,9 @@ const result = {
   productionLive,
   mutationBoundary: productionLive
     ? 'explicitly_approved_disposable_production_project_only_created_adjusted_confirmed_revised_then_physically_deleted'
-    : 'disposable_staging_project_only_created_adjusted_confirmed_revised_then_physically_deleted',
+    : deployedStagingCode
+      ? 'disposable_staging_project_only_created_adjusted_confirmed_revised_then_physically_deleted'
+      : 'disposable_staging_project_only_created_adjusted_confirmed_revised_then_api_unreadable_physical_deletion_unverified',
   diagnosticRunId: runId,
   projectName: diagnosticProjectName,
   createRequestOutcome: 'not_started',
@@ -794,15 +804,54 @@ async function cleanupProject(targetProjectId = projectId) {
       result.status = 'fail'
       return
     }
+    const runMigrationBackedCleanup = async () => {
+      if (!diagnosticCleanupDatabaseUrl) return null
+      return cleanupWizardDiagnosticProject({
+        connectionString: diagnosticCleanupDatabaseUrl,
+        expectedProjectRef,
+        targetEnvironment,
+        projectId: targetProjectId,
+        companyId,
+        diagnosticRunId: result.diagnosticRunId,
+        projectName: result.projectName,
+        releaseSha,
+        actorUsername: testUsername,
+      })
+    }
+    if (migrationBackedCleanupRequired) {
+      const directCleanup = await runMigrationBackedCleanup()
+      if (!directCleanup) {
+        throw new Error('migration-backed diagnostic cleanup did not return deletion evidence')
+      }
+      const finalCleanupRead = await apiRequest('GET', `/api/projects/${targetProjectId}`)
+      const physicallyDeleted = directCleanup.projectPhysicallyDeleted === true
+        && finalCleanupRead.response.status === 404
+      result.cleanup = {
+        status: physicallyDeleted ? 'pass' : 'fail',
+        deleteHttpStatus: null,
+        directCleanupStrategy: directCleanup.strategy,
+        databaseProjectRefVerified: directCleanup.databaseProjectRefVerified,
+        postDeleteReadHttpStatus: finalCleanupRead.response.status,
+        projectPhysicallyDeleted: physicallyDeleted,
+        projectUnreadable: finalCleanupRead.response.status === 404,
+        entityAlreadyAbsent: directCleanup.entityAlreadyAbsent,
+      }
+      if (!physicallyDeleted) result.status = 'fail'
+      return
+    }
+
     const preDeleteReadCall = await apiRequest('GET', `/api/projects/${targetProjectId}`)
     if (preDeleteReadCall.response.status === 404) {
       result.cleanup = {
-        status: 'pass',
+        status: 'api_unreadable_unverified',
         deleteHttpStatus: null,
         postDeleteReadHttpStatus: 404,
-        projectPhysicallyDeleted: true,
+        projectPhysicallyDeleted: null,
         projectUnreadable: true,
         entityAlreadyAbsent: true,
+        directCleanupStrategy: null,
+        databaseProjectRefVerified: null,
+        physicalDeletionEvidence: 'unavailable_without_migration_readback',
       }
       return
     }
@@ -827,19 +876,22 @@ async function cleanupProject(targetProjectId = projectId) {
       draftDeleteHttpStatus = draftDeleteCall.response.status
       if ([200, 204, 404].includes(draftDeleteCall.response.status)) deleteCall = draftDeleteCall
     }
-    const readCall = await apiRequest('GET', `/api/projects/${targetProjectId}`)
-    const physicallyDeleted = [200, 204, 404].includes(deleteCall.response.status)
-      && readCall.response.status === 404
+    const finalCleanupRead = await apiRequest('GET', `/api/projects/${targetProjectId}`)
+    const apiCleanupAccepted = [200, 204, 404].includes(deleteCall.response.status)
+      && finalCleanupRead.response.status === 404
     result.cleanup = {
-      status: physicallyDeleted ? 'pass' : 'fail',
+      status: apiCleanupAccepted ? 'api_unreadable_unverified' : 'fail',
       deleteHttpStatus: initialDeleteHttpStatus,
       rollbackHttpStatus,
       draftDeleteHttpStatus,
-      postDeleteReadHttpStatus: readCall.response.status,
-      projectPhysicallyDeleted: physicallyDeleted,
-      projectUnreadable: readCall.response.status === 404,
+      directCleanupStrategy: null,
+      databaseProjectRefVerified: null,
+      postDeleteReadHttpStatus: finalCleanupRead.response.status,
+      projectPhysicallyDeleted: null,
+      projectUnreadable: finalCleanupRead.response.status === 404,
+      physicalDeletionEvidence: 'unavailable_without_migration_readback',
     }
-    if (!physicallyDeleted) result.status = 'fail'
+    if (!apiCleanupAccepted) result.status = 'fail'
   } catch (cleanupError) {
     result.cleanup = {
       status: 'fail',
@@ -1351,6 +1403,7 @@ try {
       diagnosticRunId: runId,
       diagnosticSource: 'wizard_baseline_revision_live_probe',
       diagnosticProjectName,
+      diagnosticReleaseSha: releaseSha || null,
     },
     wizardPayload,
     commit: false,
