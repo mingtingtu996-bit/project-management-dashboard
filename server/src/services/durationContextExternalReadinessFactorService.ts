@@ -595,9 +595,10 @@ function isActiveMaterial(row: Record<string, unknown>) {
 
 export async function loadActiveReadinessRows(input: DurationContextInput, runtimeCache?: DurationContextRuntimeCache): Promise<ActiveReadinessRows> {
   const taskId = normalizeId(input.taskId)
+  const projectId = normalizeId(input.projectId)
   if (!taskId) return { conditions: [] as Record<string, unknown>[], obstacles: [] as Record<string, unknown>[], materials: [] as Record<string, unknown>[] }
   if (runtimeCache) {
-    const cacheKey = taskId || '__none__'
+    const cacheKey = taskId
     const current = runtimeCache.activeReadinessRowsByTaskId.get(cacheKey)
     if (current) return current
     const promise = loadActiveReadinessRows(input)
@@ -605,7 +606,7 @@ export async function loadActiveReadinessRows(input: DurationContextInput, runti
     return promise
   }
 
-  const rawReadinessRows = await readDurationContextTaskReadinessRows({ taskId })
+  const rawReadinessRows = await readDurationContextTaskReadinessRows({ taskId, projectId })
   const conditions = rawReadinessRows.conditions.filter(isOpenCondition)
   const obstacles = rawReadinessRows.obstacles.filter(isOpenObstacle)
 

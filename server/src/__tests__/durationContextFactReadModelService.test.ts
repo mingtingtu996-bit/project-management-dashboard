@@ -116,6 +116,7 @@ describe('durationContextFactReadModelService', () => {
 
     const rows = await readDurationContextTaskReadinessRows({
       taskId: 'task-1',
+      projectId: 'project-1',
       explicitMaterialIds: ['material-1', 'material-1', ''],
     })
 
@@ -130,6 +131,64 @@ describe('durationContextFactReadModelService', () => {
     expect(calls[0].eq).toContainEqual(['task_id', 'task-1'])
     expect(calls[1].eq).toContainEqual(['task_id', 'task-1'])
     expect(calls[2].in).toContainEqual(['id', ['material-1']])
+  })
+
+  it('scopes task material reads to the supplied project', async () => {
+    rowsByTable.set('task_conditions', [{ id: 'condition-1' }])
+    rowsByTable.set('task_obstacles', [{ id: 'obstacle-1' }])
+    rowsByTable.set('project_materials', [{ id: 'material-1' }])
+
+    await readDurationContextTaskReadinessRows({
+      taskId: 'task-1',
+      projectId: 'project-1',
+      explicitMaterialIds: ['material-1'],
+    })
+
+    expect(calls.find((call) => call.table === 'task_conditions')?.eq).toContainEqual(['task_id', 'task-1'])
+    expect(calls.find((call) => call.table === 'task_obstacles')?.eq).toContainEqual(['task_id', 'task-1'])
+    expect(calls.find((call) => call.table === 'project_materials')?.eq).toContainEqual(['project_id', 'project-1'])
+  })
+
+  it('scopes direct task material reads to the supplied project', async () => {
+    rowsByTable.set('project_materials', [{ id: 'material-1' }])
+
+    await readDurationContextTaskMaterialRows({
+      taskId: 'task-1',
+      projectId: 'project-1',
+      explicitMaterialIds: ['material-1'],
+    })
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0].eq).toContainEqual(['project_id', 'project-1'])
+    expect(calls[0].in).toContainEqual(['id', ['material-1']])
+  })
+
+  it('fails closed when direct task material reads lack a project scope', async () => {
+    rowsByTable.set('project_materials', [{ id: 'material-1' }])
+
+    const rows = await readDurationContextTaskMaterialRows({
+      taskId: 'task-1',
+      projectId: '',
+      explicitMaterialIds: ['material-1'],
+    })
+
+    expect(rows).toEqual([])
+    expect(calls).toHaveLength(0)
+  })
+
+  it('preserves task-scoped readiness signals without project scope while omitting materials', async () => {
+    rowsByTable.set('task_conditions', [{ id: 'condition-legacy', task_id: 'task-1' }])
+    rowsByTable.set('task_obstacles', [{ id: 'obstacle-legacy', task_id: 'task-1' }])
+    rowsByTable.set('project_materials', [{ id: 'material-legacy' }])
+
+    const rows = await readDurationContextTaskReadinessRows({ taskId: 'task-1' })
+
+    expect(rows).toEqual({
+      conditions: [{ id: 'condition-legacy', task_id: 'task-1' }],
+      obstacles: [{ id: 'obstacle-legacy', task_id: 'task-1' }],
+      materials: [],
+    })
+    expect(calls.map((call) => call.table)).toEqual(['task_conditions', 'task_obstacles'])
   })
 
   it('merges canonical task condition material references with explicit material ids', async () => {
@@ -156,6 +215,7 @@ describe('durationContextFactReadModelService', () => {
 
     const rows = await readDurationContextTaskReadinessRows({
       taskId: 'task-1',
+      projectId: 'project-1',
       explicitMaterialIds: ['material-explicit'],
     })
 
@@ -173,6 +233,7 @@ describe('durationContextFactReadModelService', () => {
   it('selects only columns that exist in the deployed readiness schema', async () => {
     await readDurationContextTaskReadinessRows({
       taskId: 'task-schema-1',
+      projectId: 'project-1',
       explicitMaterialIds: ['material-1'],
     })
 
@@ -207,7 +268,7 @@ describe('durationContextFactReadModelService', () => {
   })
 
   it('fails closed without querying materials when no explicit material ids exist', async () => {
-    const rows = await readDurationContextTaskMaterialRows({ taskId: 'task-2' })
+    const rows = await readDurationContextTaskMaterialRows({ taskId: 'task-2', projectId: 'project-1' })
 
     expect(rows).toEqual([])
     expect(calls).toHaveLength(0)
@@ -355,6 +416,7 @@ describe('durationContextFactReadModelService', () => {
 
     const rows = await readDurationContextTaskReadinessRows({
       taskId: 'task-1',
+      projectId: 'project-1',
       explicitMaterialIds: ['material-1'],
     })
 

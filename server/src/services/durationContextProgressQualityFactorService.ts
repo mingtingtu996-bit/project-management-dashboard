@@ -297,6 +297,7 @@ function isActiveMaterial(row: Record<string, unknown>) {
 
 async function loadProgressQualityActiveReadinessRows(input: DurationContextInput, runtimeCache?: ProgressQualityRuntimeCache) {
   const taskId = normalizeId(input.taskId)
+  const projectId = normalizeId(input.projectId)
   if (!taskId) return { conditions: [], obstacles: [], materials: [] } satisfies ActiveReadinessRows
   if (runtimeCache?.activeReadinessRowsByTaskId) {
     const cacheKey = cacheKeyFromId(taskId)
@@ -321,7 +322,9 @@ async function loadProgressQualityActiveReadinessRows(input: DurationContextInpu
     ]
   }).map(normalizeId).filter(Boolean) as string[])]
 
-  const materialRows = await readDurationContextTaskMaterialRows({ taskId, explicitMaterialIds })
+  const materialRows = projectId
+    ? await readDurationContextTaskMaterialRows({ taskId, projectId, explicitMaterialIds })
+    : []
   const materials = materialRows.filter(isActiveMaterial).map((row: Record<string, unknown>) => ({
     ...row,
     __linkage_quality: explicitMaterialIds.length > 0 ? 'explicit_condition' : 'linked_task_fallback',

@@ -117,9 +117,11 @@ export async function readDurationContextTaskContextRow(params: {
 
 export async function readDurationContextTaskReadinessRows(params: {
   taskId: string
+  projectId?: string | null
   explicitMaterialIds?: string[]
 }): Promise<DurationContextReadinessRows> {
   const taskId = normalizeId(params.taskId)
+  const projectId = normalizeId(params.projectId)
   if (!taskId) return emptyReadinessRows()
 
   const [conditions, obstacles] = await Promise.all([
@@ -138,10 +140,11 @@ export async function readDurationContextTaskReadinessRows(params: {
     ...(params.explicitMaterialIds ?? []),
     ...conditions.map(readMaterialConditionReference),
   ])
-  const materials = materialIds.length > 0
+  const materials = projectId && materialIds.length > 0
     ? await readOrEmpty(
         durationContextFactTable('project_materials')
           .select(PROJECT_MATERIAL_READINESS_SELECT)
+          .eq('project_id', projectId)
           .in('id', materialIds),
       )
     : []
@@ -173,16 +176,19 @@ export async function readDurationContextTaskReadinessSignalRows(params: {
 
 export async function readDurationContextTaskMaterialRows(params: {
   taskId: string
+  projectId: string
   explicitMaterialIds?: string[]
 }): Promise<Record<string, unknown>[]> {
   const taskId = normalizeId(params.taskId)
-  if (!taskId) return []
+  const projectId = normalizeId(params.projectId)
+  if (!taskId || !projectId) return []
 
   const materialIds = uniqueIds(params.explicitMaterialIds ?? [])
   if (materialIds.length === 0) return []
   return readOrEmpty(
     durationContextFactTable('project_materials')
       .select(PROJECT_MATERIAL_READINESS_SELECT)
+      .eq('project_id', projectId)
       .in('id', materialIds),
   )
 }

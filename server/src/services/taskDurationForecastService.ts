@@ -2385,7 +2385,7 @@ async function loadExternalReadinessContext(
   projectId: string,
 ): Promise<ForecastExternalReadinessContext> {
   const [readinessRows, acceptancePlans, forecastOnlyBridges] = await Promise.all([
-    readDurationContextTaskReadinessRows({ taskId }),
+    readDurationContextTaskReadinessRows({ taskId, projectId }),
     loadForecastAcceptancePlans(taskId, projectId),
     loadForecastOnlyBridgeConditions(taskId, projectId),
   ])

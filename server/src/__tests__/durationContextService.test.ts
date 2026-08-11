@@ -3125,12 +3125,14 @@ describe('durationContextService resource pressure', () => {
     mocks.state.materials = [
       {
         id: 'material-dated',
+        project_id: 'project-1',
         expected_arrival_date: '2026-05-25',
         actual_arrival_date: null,
         record_status: 'active',
       },
       {
         id: 'material-undated',
+        project_id: 'project-1',
         expected_arrival_date: null,
         actual_arrival_date: null,
         record_status: 'active',
@@ -3215,6 +3217,7 @@ describe('durationContextService resource pressure', () => {
     }]
     mocks.state.materials = [{
       id: 'material-delay',
+      project_id: 'project-1',
       expected_arrival_date: '2026-05-22',
       actual_arrival_date: null,
       record_status: 'active',
@@ -3336,6 +3339,7 @@ describe('durationContextService resource pressure', () => {
     mocks.state.materials = [
       {
         id: 'material-explicit',
+        project_id: 'project-1',
         linked_task_id: null,
         expected_arrival_date: '2026-05-25',
         actual_arrival_date: null,
@@ -3343,6 +3347,7 @@ describe('durationContextService resource pressure', () => {
       },
       {
         id: 'material-fallback',
+        project_id: 'project-1',
         linked_task_id: 'task-explicit-material',
         expected_arrival_date: '2026-06-10',
         actual_arrival_date: null,
@@ -3940,12 +3945,14 @@ describe('durationContextService resource pressure', () => {
     mocks.state.materials = [
       {
         id: 'material-dated',
+        project_id: 'project-1',
         expected_arrival_date: '2026-05-25',
         actual_arrival_date: null,
         record_status: 'active',
       },
       {
         id: 'material-undated-linked-fallback',
+        project_id: 'project-1',
         linked_task_id: 'task-readiness-regression',
         expected_arrival_date: null,
         actual_arrival_date: null,
