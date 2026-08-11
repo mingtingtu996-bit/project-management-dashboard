@@ -68,6 +68,8 @@ type ConditionLike = {
   blocking_level?: string | null
   drawing_package_id?: string | null
   drawing_package_code?: string | null
+  source_type?: string | null
+  source_ref_id?: string | null
   source_entity_type?: string | null
   source_entity_id?: string | null
   target_date?: string | null
@@ -94,6 +96,8 @@ type ObstacleLike = {
   expected_resolution_date?: string | null
   obstacle_type?: string | null
   description?: string | null
+  source_type?: string | null
+  source_ref_id?: string | null
   source_entity_type?: string | null
   source_entity_id?: string | null
   participant_unit_id?: string | null
@@ -416,6 +420,7 @@ export function buildConditionImpactSignals(conditions: ConditionLike[]): Execut
       const category = classifyCategory([
         condition.condition_type,
         condition.name,
+        condition.source_type,
         condition.source_entity_type,
         condition.drawing_package_id,
         condition.drawing_package_code,
@@ -429,8 +434,8 @@ export function buildConditionImpactSignals(conditions: ConditionLike[]): Execut
       const source = canonicalSource({
         fallbackType: 'task_condition',
         fallbackId: id,
-        sourceEntityType: condition.source_entity_type,
-        sourceEntityId: condition.source_entity_id,
+        sourceEntityType: condition.source_entity_type ?? condition.source_type,
+        sourceEntityId: condition.source_entity_id ?? condition.source_ref_id,
       })
       const responsibility = responsibilityFromInput({
         category,
@@ -457,8 +462,8 @@ export function buildConditionImpactSignals(conditions: ConditionLike[]): Execut
           : `${category} start condition is unresolved without a usable date`,
         dedupeKey: sourceDedupeKey({
           fallback: `condition:${id}`,
-          sourceEntityType: condition.source_entity_type,
-          sourceEntityId: condition.source_entity_id,
+          sourceEntityType: source.sourceEntityType,
+          sourceEntityId: source.sourceEntityId,
           category,
           phase,
         }),
@@ -485,7 +490,7 @@ export function buildObstacleImpactSignals(obstacles: ObstacleLike[], now = new 
     .filter((obstacle) => !obstacleIsClosed(obstacle))
     .map((obstacle, index) => {
       const id = normalizeText(obstacle.id) || `unknown-${index + 1}`
-      const category = classifyCategory([obstacle.obstacle_type, obstacle.description], 'general')
+      const category = classifyCategory([obstacle.obstacle_type, obstacle.description, obstacle.source_type], 'general')
       const severity = severityFromText(
         obstacle.progress_impact_level ?? obstacle.impact_level ?? obstacle.blocking_level ?? obstacle.severity,
         'warning',
@@ -498,8 +503,8 @@ export function buildObstacleImpactSignals(obstacles: ObstacleLike[], now = new 
       const source = canonicalSource({
         fallbackType: 'task_obstacle',
         fallbackId: id,
-        sourceEntityType: obstacle.source_entity_type,
-        sourceEntityId: obstacle.source_entity_id,
+        sourceEntityType: obstacle.source_entity_type ?? obstacle.source_type,
+        sourceEntityId: obstacle.source_entity_id ?? obstacle.source_ref_id,
       })
       const responsibility = responsibilityFromInput({
         category,
@@ -526,8 +531,8 @@ export function buildObstacleImpactSignals(obstacles: ObstacleLike[], now = new 
           : `${category} obstacle is open${critical ? ' without a clear resolution date' : ''}`,
         dedupeKey: sourceDedupeKey({
           fallback: `obstacle:${id}`,
-          sourceEntityType: obstacle.source_entity_type,
-          sourceEntityId: obstacle.source_entity_id,
+          sourceEntityType: source.sourceEntityType,
+          sourceEntityId: source.sourceEntityId,
           category,
           phase,
         }),

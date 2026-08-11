@@ -3108,7 +3108,7 @@ describe('taskDurationForecastService', () => {
       status: 'open',
       source_entity_type: 'project_material',
       source_entity_id: 'material-known',
-      expected_date: '2026-05-22',
+      target_date: '2026-05-22',
     }]
     state.obstacles = [{
       id: 'obstacle-known',
@@ -3204,11 +3204,21 @@ describe('taskDurationForecastService', () => {
       required_for_start: true,
       blocking_level: 'hard',
       status: 'open',
+    }, {
+      id: 'condition-material-unknown',
+      task_id: 'task-unstarted-unknown',
+      condition_type: 'project_material',
+      name: 'Waterproofing material reference',
+      is_satisfied: false,
+      required_for_start: false,
+      blocking_level: 'soft',
+      status: 'open',
+      source_type: 'project_material',
+      source_ref_id: 'material-unknown',
     }]
     state.materials = [{
       id: 'material-unknown',
       project_id: 'project-1',
-      linked_task_id: 'task-unstarted-unknown',
       actual_arrival_date: null,
       expected_arrival_date: null,
       lifecycle_status: 'active',
@@ -3307,7 +3317,7 @@ describe('taskDurationForecastService', () => {
       status: 'open',
       source_entity_type: 'project_material',
       source_entity_id: 'material-known',
-      expected_date: '2026-05-22',
+      target_date: '2026-05-22',
     })
 
     const forecast = await forecastTaskDuration('task-unstarted-dated-conditions')
@@ -3493,11 +3503,21 @@ describe('taskDurationForecastService', () => {
       blocking_level: 'hard',
       status: 'open',
       target_date: '2026-05-12',
+    }, {
+      id: 'condition-material-stale',
+      task_id: 'task-unstarted-stale-dates',
+      condition_type: 'project_material',
+      name: 'Facade material reference',
+      is_satisfied: false,
+      required_for_start: false,
+      blocking_level: 'soft',
+      status: 'open',
+      source_type: 'project_material',
+      source_ref_id: 'material-stale',
     }]
     state.materials = [{
       id: 'material-stale',
       project_id: 'project-1',
-      linked_task_id: 'task-unstarted-stale-dates',
       actual_arrival_date: null,
       expected_arrival_date: '2026-05-10',
       lifecycle_status: 'active',
@@ -3622,11 +3642,21 @@ describe('taskDurationForecastService', () => {
       required_for_start: true,
       blocking_level: 'hard',
       status: 'open',
+    }, {
+      id: 'condition-material-1',
+      task_id: 'task-external',
+      condition_type: 'project_material',
+      name: 'Waterproofing material reference',
+      is_satisfied: false,
+      required_for_start: false,
+      blocking_level: 'soft',
+      status: 'open',
+      source_type: 'project_material',
+      source_ref_id: 'material-1',
     }]
     state.materials = [{
       id: 'material-1',
       project_id: 'project-1',
-      linked_task_id: 'task-external',
       actual_arrival_date: null,
       expected_arrival_date: '2026-05-16',
       lifecycle_status: 'active',
@@ -3716,7 +3746,7 @@ describe('taskDurationForecastService', () => {
       status: 'open',
       source_entity_type: 'project_material',
       source_entity_id: 'material-shared',
-      expected_date: '2026-05-24',
+      target_date: '2026-05-24',
     }]
     state.obstacles = [{
       id: 'obstacle-material-shared',
@@ -3783,7 +3813,7 @@ describe('taskDurationForecastService', () => {
       status: 'open',
       source_entity_type: 'project_material',
       source_entity_id: 'material-critical-1',
-      expected_date: '2026-05-23',
+      target_date: '2026-05-23',
       participant_unit_id: 'unit-facade',
       responsibility_role: 'supplier_install',
     }]

@@ -31,6 +31,7 @@ describe('duration architecture boundary guard', () => {
   it('keeps external readiness fact query construction behind the read model', () => {
     const contextSource = readFileSync(resolve(serverRoot, 'src/services/durationContextService.ts'), 'utf8')
     const readModelSource = readFileSync(resolve(serverRoot, 'src/services/durationContextFactReadModelService.ts'), 'utf8')
+    const forecastSource = readFileSync(resolve(serverRoot, 'src/services/taskDurationForecastService.ts'), 'utf8')
     const externalReadinessSource = readFileSync(resolve(serverRoot, 'src/services/durationContextExternalReadinessFactorService.ts'), 'utf8')
     const workflowSequenceSource = readFileSync(resolve(serverRoot, 'src/services/durationContextWorkflowSequenceFactorService.ts'), 'utf8')
 
@@ -48,7 +49,9 @@ describe('duration architecture boundary guard', () => {
     }
     expect(contextSource).toContain('readDurationContextTaskContextRow')
     expect(contextSource).not.toContain('readDurationContextTaskReadinessSignalRows')
-    expect(externalReadinessSource).toContain('readDurationContextTaskReadinessSignalRows')
+    expect(externalReadinessSource).toContain('readDurationContextTaskReadinessRows')
+    expect(externalReadinessSource).not.toContain('readDurationContextTaskReadinessSignalRows')
+    expect(externalReadinessSource).not.toContain('readDurationContextTaskMaterialRows')
     expect(contextSource).toContain('readDurationContextResourceReadinessRows')
     expect(contextSource).not.toContain('readDurationContextTaskProgressSnapshotRows')
     expect(externalReadinessSource).toContain('readDurationContextTaskProgressSnapshotRows')
@@ -57,6 +60,12 @@ describe('duration architecture boundary guard', () => {
     expect(workflowSequenceSource).toContain('readDurationContextActiveTaskDependencies')
     expect(contextSource).toContain('readDurationContextResponsibleUnitHistoryRows')
     expect(contextSource).toContain('readDurationContextResourceConflictTaskRows')
+    expect(forecastSource).toContain('readDurationContextTaskReadinessRows')
+    expect(forecastSource).toContain('readDurationContextTaskReadinessSignalRows')
+    expect(forecastSource).not.toContain('readDurationContextResourceReadinessRows')
+    expect(forecastSource).not.toContain("from('task_conditions')")
+    expect(forecastSource).not.toContain("from('task_obstacles')")
+    expect(forecastSource).not.toContain("from('project_materials')")
   })
 
   it('keeps progress quality factor construction behind its dedicated service boundary', () => {
@@ -328,7 +337,9 @@ describe('duration architecture boundary guard', () => {
     expect(contextSource).not.toContain('function normalizeExternalReadinessCalibrationOverlay')
     expect(contextSource).toContain('buildExternalReadinessFactor(contextInput, runtimeCache)')
     expect(externalReadinessSource).toContain('export async function buildExternalReadinessFactor')
-    expect(externalReadinessSource).toContain('readDurationContextTaskReadinessSignalRows')
+    expect(externalReadinessSource).toContain('readDurationContextTaskReadinessRows')
+    expect(externalReadinessSource).not.toContain('readDurationContextTaskReadinessSignalRows')
+    expect(externalReadinessSource).not.toContain('readDurationContextTaskMaterialRows')
     expect(externalReadinessSource).toContain('externalReadinessCalibration')
     expect(externalReadinessSource).not.toContain("from('tasks')")
     expect(externalReadinessSource).not.toContain("from('task_conditions')")

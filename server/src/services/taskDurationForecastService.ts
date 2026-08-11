@@ -106,6 +106,10 @@ import {
 } from './durationRuntimeConsumerObservationService.js'
 import { resolveLiveTaskCriticalityProjection } from './taskCriticalityProjectionService.js'
 import { listAcceptancePlanIdsCoveringTask } from './acceptancePlanTaskLinkService.js'
+import {
+  readDurationContextTaskReadinessRows,
+  readDurationContextTaskReadinessSignalRows,
+} from './durationContextFactReadModelService.js'
 
 export interface TaskDurationForecast {
   taskId: string
@@ -257,6 +261,8 @@ type ForecastObstacleRow = {
   estimated_resolve_date?: string | null
   obstacle_type?: string | null
   description?: string | null
+  source_type?: string | null
+  source_ref_id?: string | null
   source_entity_type?: string | null
   source_entity_id?: string | null
 }
@@ -317,6 +323,8 @@ type ForecastConditionRow = {
   blocking_level?: string | null
   drawing_package_id?: string | null
   drawing_package_code?: string | null
+  source_type?: string | null
+  source_ref_id?: string | null
   source_entity_type?: string | null
   source_entity_id?: string | null
   target_date?: string | null
@@ -1660,28 +1668,14 @@ async function loadProgressSnapshots(taskId: string): Promise<ForecastSnapshotRo
 }
 
 async function loadOpenObstacles(taskId: string): Promise<ForecastObstacleRow[]> {
-  const { data, error } = await (supabase as any)
-    .from('task_obstacles')
-    .select('id, status, severity, created_at, estimated_resolve_date, obstacle_type, description, source_entity_type, source_entity_id')
-    .eq('task_id', taskId)
-    .in('status', OPEN_OBSTACLE_STATUSES)
-
-  if (error) {
-    logger.warn('[taskDurationForecastService] failed to load task obstacles', { taskId, error })
-    return []
-  }
-
-  return Array.isArray(data) ? data as ForecastObstacleRow[] : []
+  const { obstacles } = await readDurationContextTaskReadinessSignalRows({ taskId })
+  const openStatuses = new Set(OPEN_OBSTACLE_STATUSES.map((status) => String(status)))
+  return obstacles
+    .filter((row) => openStatuses.has(String(row.status ?? ''))) as ForecastObstacleRow[]
 }
 
 async function countOpenObstacles(taskId: string) {
-  const { data } = await (supabase as any)
-    .from('task_obstacles')
-    .select('id, status')
-    .eq('task_id', taskId)
-    .in('status', OPEN_OBSTACLE_STATUSES)
-
-  return Array.isArray(data) ? data.length : 0
+  return (await loadOpenObstacles(taskId)).length
 }
 
 async function loadActiveDependencies(taskId: string, projectId?: string | null): Promise<ForecastDependencyRow[]> {
@@ -2390,31 +2384,18 @@ async function loadExternalReadinessContext(
   taskId: string,
   projectId: string,
 ): Promise<ForecastExternalReadinessContext> {
-  const [conditions, materials, acceptancePlans, forecastOnlyBridges] = await Promise.all([
-    (supabase as any)
-      .from('task_conditions')
-      .select('id, condition_type, name, status, is_satisfied, required_for_start, blocking_level, drawing_package_id, drawing_package_code, source_entity_type, source_entity_id, target_date, planned_date, expected_date, due_date, participant_unit_id')
-      .eq('task_id', taskId)
-      .then((result: any) => Array.isArray(result.data) ? result.data as ForecastConditionRow[] : [], (error: unknown) => {
-        logger.warn('[taskDurationForecastService] failed to load task conditions', { taskId, error })
-        return []
-      }),
-    (supabase as any)
-      .from('project_materials')
-      .select('id, actual_arrival_date, expected_arrival_date, lifecycle_status, record_status')
-      .eq('linked_task_id', taskId)
-      .eq('project_id', projectId)
-      .then((result: any) => Array.isArray(result.data) ? result.data as ForecastMaterialRow[] : [], (error: unknown) => {
-        logger.warn('[taskDurationForecastService] failed to load linked project materials', { taskId, error })
-        return []
-      }),
+  const [readinessRows, acceptancePlans, forecastOnlyBridges] = await Promise.all([
+    readDurationContextTaskReadinessRows({ taskId, projectId }),
     loadForecastAcceptancePlans(taskId, projectId),
     loadForecastOnlyBridgeConditions(taskId, projectId),
   ])
 
   return {
-    conditions: [...conditions, ...forecastOnlyBridges.conditions],
-    materials,
+    conditions: [
+      ...readinessRows.conditions as ForecastConditionRow[],
+      ...forecastOnlyBridges.conditions,
+    ],
+    materials: readinessRows.materials as ForecastMaterialRow[],
     acceptancePlans,
     forecastOnlyBridgeCounts: forecastOnlyBridges.counts,
     forecastOnlyBridgeSources: forecastOnlyBridges.sources,

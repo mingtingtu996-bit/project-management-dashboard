@@ -87,6 +87,40 @@ describe('executionImpactSignals', () => {
     }))
   })
 
+  it('uses canonical source_type and source_ref_id aliases for blocker identity', () => {
+    const conditionSignals = buildConditionImpactSignals([{
+      id: 'condition-material-canonical',
+      condition_type: 'material',
+      name: 'Facade panel arrival',
+      is_satisfied: false,
+      required_for_start: true,
+      blocking_level: 'hard',
+      source_type: 'project_material',
+      source_ref_id: 'material-canonical',
+      target_date: '2026-05-28',
+    } as any])
+    const obstacleSignals = buildObstacleImpactSignals([{
+      id: 'obstacle-material-canonical',
+      obstacle_type: 'material',
+      description: 'Facade panel supplier delay',
+      severity: 'critical',
+      source_type: 'project_material',
+      source_ref_id: 'material-canonical',
+      estimated_resolve_date: '2026-05-28',
+    } as any], new Date('2026-05-20T08:00:00.000Z'))
+
+    const summary = summarizeDelayImpactSignals([...conditionSignals, ...obstacleSignals], {
+      forecastDelayDays: 5,
+    })
+
+    expect(summary.dedupedCount).toBe(1)
+    expect(summary.signals[0]).toEqual(expect.objectContaining({
+      sourceEntityType: 'project_material',
+      sourceEntityId: 'material-canonical',
+      dedupeKey: 'blocker:project_material:material-canonical:start',
+    }))
+  })
+
   it('uses canonical source entity identity when a condition points at a shared blocker', () => {
     const [signal] = buildConditionImpactSignals([
       {

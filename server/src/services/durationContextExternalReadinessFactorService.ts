@@ -15,9 +15,8 @@ import {
   type WorkEnvironment,
 } from './algorithmSeedResolver.js'
 import {
-  readDurationContextTaskMaterialRows,
   readDurationContextTaskProgressSnapshotRows,
-  readDurationContextTaskReadinessSignalRows,
+  readDurationContextTaskReadinessRows,
 } from './durationContextFactReadModelService.js'
 import { loadPublishedProjectProductivityCalibration } from './projectProductivityCalibrationStore.js'
 import type {
@@ -596,9 +595,10 @@ function isActiveMaterial(row: Record<string, unknown>) {
 
 export async function loadActiveReadinessRows(input: DurationContextInput, runtimeCache?: DurationContextRuntimeCache): Promise<ActiveReadinessRows> {
   const taskId = normalizeId(input.taskId)
+  const projectId = normalizeId(input.projectId)
   if (!taskId) return { conditions: [] as Record<string, unknown>[], obstacles: [] as Record<string, unknown>[], materials: [] as Record<string, unknown>[] }
   if (runtimeCache) {
-    const cacheKey = taskId || '__none__'
+    const cacheKey = taskId
     const current = runtimeCache.activeReadinessRowsByTaskId.get(cacheKey)
     if (current) return current
     const promise = loadActiveReadinessRows(input)
@@ -606,7 +606,7 @@ export async function loadActiveReadinessRows(input: DurationContextInput, runti
     return promise
   }
 
-  const rawReadinessRows = await readDurationContextTaskReadinessSignalRows({ taskId })
+  const rawReadinessRows = await readDurationContextTaskReadinessRows({ taskId, projectId })
   const conditions = rawReadinessRows.conditions.filter(isOpenCondition)
   const obstacles = rawReadinessRows.obstacles.filter(isOpenObstacle)
 
@@ -620,10 +620,13 @@ export async function loadActiveReadinessRows(input: DurationContextInput, runti
     ]
   }))
 
-  const materialRows = await readDurationContextTaskMaterialRows({ taskId, explicitMaterialIds })
-  const materials = materialRows.filter(isActiveMaterial).map((row: Record<string, unknown>) => ({
+  const explicitMaterialIdSet = new Set(explicitMaterialIds)
+  const materials = rawReadinessRows.materials
+    .filter((row) => explicitMaterialIdSet.has(normalizeId(row.id) ?? ''))
+    .filter(isActiveMaterial)
+    .map((row: Record<string, unknown>) => ({
     ...row,
-    __linkage_quality: explicitMaterialIds.length > 0 ? 'explicit_condition' : 'linked_task_fallback',
+    __linkage_quality: 'explicit_condition',
   }))
 
   return {
