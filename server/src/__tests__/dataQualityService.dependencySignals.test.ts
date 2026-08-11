@@ -46,7 +46,7 @@ describe('loadTaskDependencySignals', () => {
     state.listActiveProjectIds.mockResolvedValue([])
   })
 
-  it('persists a large finding set with one parameterized bulk upsert transaction', async () => {
+  it('persists a large finding set in bounded no-op-aware upsert batches', async () => {
     const projectId = '10000000-0000-4000-8000-000000000001'
     const nextFindings = Array.from({ length: 1_200 }, (_, index) => ({
       finding_key: `LINEAGE_INCOMPLETE:task:${index}`,
@@ -72,7 +72,9 @@ describe('loadTaskDependencySignals', () => {
     }]
     state.query
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1_200 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 500 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 500 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 200 })
       .mockResolvedValueOnce({ rows: persistedRows })
 
     const result = await persistDataQualityFindingsDirect({
@@ -82,9 +84,13 @@ describe('loadTaskDependencySignals', () => {
       transactionRunner: async <T>(work: () => Promise<T>) => work(),
     })
 
-    expect(state.query).toHaveBeenCalledTimes(3)
-    expect(state.query.mock.calls[1]?.[0]).toContain('jsonb_to_recordset')
-    expect(JSON.parse(state.query.mock.calls[1]?.[1]?.[0])).toHaveLength(1_200)
+    const upsertCalls = state.query.mock.calls.filter(([sql]) => String(sql).includes('jsonb_to_recordset'))
+    expect(state.query).toHaveBeenCalledTimes(5)
+    expect(upsertCalls).toHaveLength(3)
+    expect(upsertCalls.map(([, params]) => JSON.parse(params?.[0]).length)).toEqual([500, 500, 200])
+    for (const [sql] of upsertCalls) {
+      expect(String(sql)).toContain('IS DISTINCT FROM')
+    }
     expect(result).toEqual(persistedRows)
   })
 

@@ -490,6 +490,11 @@ describe('wbsTemplateCandidateEventService', () => {
     expect(String(effects[0]?.[0])).toContain('from inserted_event')
     expect(String(effects[0]?.[0])).toContain('public.wbs_template_candidate_aggregations')
     expect(String(effects[0]?.[0])).toContain('public.duration_plan_network_outcomes')
+    const atomicSql = String(effects[0]?.[0])
+    expect(atomicSql).not.toMatch(/\$(?:22|23|24|25)(?!::integer)/)
+    expect(atomicSql).toContain(
+      'case when $22::integer > 0 then $23::integer::real / $22::integer::real else null end',
+    )
     expect(mocks.eventInsert).not.toHaveBeenCalled()
     expect(mocks.aggregationUpsert).not.toHaveBeenCalled()
     expect(mocks.planNetworkOutcomeUpsert).not.toHaveBeenCalled()

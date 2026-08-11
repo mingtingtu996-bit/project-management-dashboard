@@ -3363,6 +3363,13 @@
     },
     {
       "kind": "migration",
+      "id": "337_construction_dependency_replay_runtime_rls",
+      "architectureUnit": "底座：平台运行观测",
+      "runtimeScope": "platform_foundation",
+      "assignmentReason": "grants the non-bypass backend runtime governed append-only access to construction dependency replay calibration reports"
+    },
+    {
+      "kind": "migration",
       "id": "CLEAN_MIGRATION",
       "architectureUnit": "底座：平台运行观测",
       "runtimeScope": "platform_foundation",
