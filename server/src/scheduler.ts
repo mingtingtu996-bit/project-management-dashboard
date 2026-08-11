@@ -289,7 +289,7 @@ class DailyTaskDurationForecastJob {
   private wallClockTimer = new PersistentWallClockJobTimer({
     jobName: 'dailyTaskDurationForecastJob',
     schedule: { kind: 'daily', hour: 0, minute: 40 },
-    execute: () => this.execute('scheduler'),
+    execute: ({ signal }) => this.execute('scheduler', signal),
     onScheduled: ({ nextRun, delayMs }) => logger.info('Daily task duration forecast job scheduled', {
       nextRun: nextRun.toISOString(),
       trigger: 'daily_00_40',
@@ -312,7 +312,10 @@ class DailyTaskDurationForecastJob {
     }
   }
 
-  private async execute(triggeredBy: 'scheduler' | 'manual' = 'scheduler') {
+  private async execute(
+    triggeredBy: 'scheduler' | 'manual' = 'scheduler',
+    schedulerSignal?: AbortSignal,
+  ) {
     if (this.isRunning) {
       logger.warn('Daily task duration forecast job is already running, skip tick')
       return
@@ -329,13 +332,16 @@ class DailyTaskDurationForecastJob {
           triggeredBy,
           jobId,
         },
-        async () => {
+        async (_attempt, attemptContext) => {
           const { refreshDailyActiveTaskDurationForecasts } = await import('./services/taskDurationForecastService.js')
           return refreshDailyActiveTaskDurationForecasts({
             limit: DAILY_DURATION_FORECAST_LIMIT,
             batchSize: DAILY_DURATION_FORECAST_BATCH_SIZE,
             maxRuntimeMs: DAILY_DURATION_FORECAST_MAX_RUNTIME_MS,
             freshnessSloMs: DAILY_DURATION_FORECAST_FRESHNESS_SLO_MS,
+            signal: schedulerSignal
+              ? AbortSignal.any([schedulerSignal, attemptContext.signal])
+              : attemptContext.signal,
           })
         },
       )

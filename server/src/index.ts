@@ -352,8 +352,7 @@ function registerGracefulShutdown(
           jobsDrained,
           requestsDrained,
         })
-        process.exitCode = 1
-        return
+        process.exit(1)
       }
 
       logger.info('runtime shutdown completed', { signal })
@@ -365,7 +364,7 @@ function registerGracefulShutdown(
       })
       server.closeAllConnections?.()
       void schedulerModule?.releaseSchedulerLeadership()
-      process.exitCode = 1
+      process.exit(1)
     })
     return shutdownPromise
   }

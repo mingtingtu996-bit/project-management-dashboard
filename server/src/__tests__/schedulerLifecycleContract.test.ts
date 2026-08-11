@@ -37,6 +37,20 @@ describe('scheduler lifecycle contract', () => {
     expect(shutdownSection.indexOf('waitForActiveJobsToDrain')).toBeLessThan(
       shutdownSection.indexOf('releaseSchedulerLeadership'),
     )
+
+    const graceExhaustedSection = shutdownSection.slice(
+      shutdownSection.indexOf("if (!jobsDrained || !requestsDrained)"),
+      shutdownSection.indexOf("logger.info('runtime shutdown completed'"),
+    )
+    expect(graceExhaustedSection).toContain('process.exit(1)')
+    expect(graceExhaustedSection).not.toContain('process.exitCode = 1')
+
+    const shutdownFailureStart = shutdownSection.indexOf("logger.error('runtime shutdown failed'")
+    const shutdownFailureSection = shutdownSection.slice(
+      shutdownFailureStart,
+      shutdownSection.indexOf('onJobRuntimeFatal', shutdownFailureStart),
+    )
+    expect(shutdownFailureSection).toContain('process.exit(1)')
   })
 
   it('propagates planning-governance branch failures and reschedules weekly work by wall clock', () => {

@@ -4164,6 +4164,73 @@ describe('taskDurationForecastService', () => {
     expect(state.updatedForecasts).toHaveLength(0)
   })
 
+  it('stops assigning new tasks inside a daily refresh batch after the runtime budget is exhausted', async () => {
+    state.tasks = Array.from({ length: 5 }, (_, index) => ({
+      id: `task-budget-mid-batch-${index + 1}`,
+      project_id: 'project-1',
+      title: `Budget guarded task ${index + 1}`,
+      planned_start_date: '2026-05-18',
+      planned_end_date: '2026-05-28',
+      actual_start_date: '2026-05-18',
+      progress: 20,
+      status: 'in_progress',
+      updated_at: `2026-05-18T0${7 - index}:00:00.000Z`,
+    }))
+    mocks.getTaskDurationSuggestion.mockImplementation(async () => {
+      vi.advanceTimersByTime(50)
+      return baseSuggestion()
+    })
+
+    const result = await refreshDailyActiveTaskDurationForecasts({
+      limit: 10,
+      batchSize: 5,
+      maxRuntimeMs: 100,
+      freshnessSloMs: 36 * 60 * 60 * 1000,
+    })
+
+    expect(mocks.getTaskDurationSuggestion).toHaveBeenCalledTimes(3)
+    expect(result).toMatchObject({
+      scanned: 5,
+      refreshed: 3,
+      failed: 0,
+      skippedByTimeBudget: 2,
+      batchesAttempted: 1,
+      timeBudgetExceeded: true,
+    })
+  })
+
+  it('does not persist a daily forecast after its runtime signal is aborted during calculation', async () => {
+    const controller = new AbortController()
+    const abortError = new Error('daily forecast runtime expired')
+    state.tasks = [{
+      id: 'task-aborted-during-calculation',
+      project_id: 'project-1',
+      title: 'Abort guarded task',
+      planned_start_date: '2026-05-18',
+      planned_end_date: '2026-05-28',
+      actual_start_date: '2026-05-18',
+      progress: 20,
+      status: 'in_progress',
+      updated_at: '2026-05-18T07:00:00.000Z',
+    }]
+    mocks.getTaskDurationSuggestion.mockImplementationOnce(async () => {
+      controller.abort(abortError)
+      return baseSuggestion()
+    })
+
+    await expect(refreshDailyActiveTaskDurationForecasts({
+      limit: 10,
+      batchSize: 1,
+      maxRuntimeMs: 10_000,
+      freshnessSloMs: 36 * 60 * 60 * 1000,
+      signal: controller.signal,
+    })).rejects.toBe(abortError)
+
+    expect(state.insertedForecasts).toHaveLength(0)
+    expect(state.updatedForecasts).toHaveLength(0)
+    expect(mocks.recordDurationAccuracyPrediction).not.toHaveBeenCalled()
+  })
+
   it('treats a nonexistent generated_at date as stale in daily freshness metrics', async () => {
     vi.setSystemTime(new Date('2026-03-02T08:05:00.000Z'))
     state.tasks = [{

@@ -345,6 +345,7 @@ describe('system registry guard', () => {
     expect(result.registry.entries.some((entry: { kind: string; id: string }) => entry.kind === 'route' && entry.id === 'auth-register')).toBe(true)
     expect(result.registry.entries.some((entry: { kind: string; id: string }) => entry.kind === 'service' && entry.id === 'taskDurationForecastService')).toBe(true)
     expect(result.registry.entries.some((entry: { kind: string; id: string }) => entry.kind === 'service' && entry.id === 'durationContextSampleReadModelService')).toBe(true)
+    expect(result.registry.entries.some((entry: { kind: string; id: string }) => entry.kind === 'service' && entry.id === 'runtimeAbortContext')).toBe(true)
     expect(result.registry.entries.some((entry: { kind: string; id: string }) => entry.kind === 'job' && entry.id === 'durationContextPolicyLearningJob')).toBe(true)
   })
 

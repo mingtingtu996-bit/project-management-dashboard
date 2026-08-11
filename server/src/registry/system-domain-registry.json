@@ -6501,6 +6501,13 @@
     },
     {
       "kind": "service",
+      "id": "runtimeAbortContext",
+      "architectureUnit": "底座：平台运行观测",
+      "runtimeScope": "platform_foundation",
+      "assignmentReason": "propagates job-attempt cancellation through async runtime and outbound request boundaries"
+    },
+    {
+      "kind": "service",
       "id": "runtimeCredentialBoundary",
       "architectureUnit": "底座：平台运行观测",
       "runtimeScope": "platform_foundation",
