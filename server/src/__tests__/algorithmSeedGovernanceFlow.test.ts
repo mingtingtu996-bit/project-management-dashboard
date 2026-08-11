@@ -143,6 +143,7 @@ vi.mock('../services/dbService.js', () => {
 
 const { importV1474AlgorithmSeeds } = await import('../services/algorithmSeedImportService.js')
 const {
+  clearAlgorithmSeedResolverCache,
   resolveAlgorithmSeedRecordsWithDiagnostics,
   resolveStandardWorkDurationSeed,
   resolveV1474WorkflowDictionary,
@@ -176,6 +177,7 @@ const governedRuleAssetSeedTypes = [
 describe('algorithm seed governance flow', () => {
   beforeEach(() => {
     mocks.uuidCounter = 0
+    clearAlgorithmSeedResolverCache()
     mocks.tables.algorithm_seed_versions = []
     mocks.tables.algorithm_seed_records = []
     mocks.tables.algorithm_seed_import_logs = []
