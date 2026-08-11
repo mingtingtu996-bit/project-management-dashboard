@@ -117,6 +117,36 @@ describe('jobRuntime', () => {
     expect(fatal.mock.calls[0]?.[0]).toMatchObject({ code: 'JOB_ATTEMPT_TIMEOUT' })
   })
 
+  it('propagates a hard timeout to Supabase fetches so the active attempt can drain', async () => {
+    const {
+      getJobRuntimeHealth,
+      runJobWithRetry,
+      waitForActiveJobsToDrain,
+    } = await import('../services/jobRuntime.js')
+    const { createJobLeaseFencedFetch } = await import('../services/jobLeaseFenceContext.js')
+    let requestSignal: AbortSignal | null = null
+    const baseFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requestSignal = init?.signal ?? null
+      return new Promise<Response>((_resolve, reject) => {
+        requestSignal?.addEventListener('abort', () => reject(requestSignal?.reason), { once: true })
+      })
+    })
+    const runtimeFetch = createJobLeaseFencedFetch(baseFetch as typeof fetch)
+
+    await expect(runJobWithRetry({
+      jobName: 'supabaseTimeoutJob',
+      triggeredBy: 'scheduler',
+      maxAttempts: 1,
+      timeoutMs: 20,
+    }, async () => runtimeFetch('https://example.test/rest/v1/tasks')))
+      .rejects.toMatchObject({ code: 'JOB_ATTEMPT_TIMEOUT' })
+
+    expect(requestSignal).not.toBeNull()
+    expect(requestSignal?.aborted).toBe(true)
+    await expect(waitForActiveJobsToDrain(100)).resolves.toBe(true)
+    expect(getJobRuntimeHealth().activeAttemptCount).toBe(0)
+  })
+
   it('stops accepting work during shutdown and drains an abort-aware active attempt', async () => {
     const {
       beginJobRuntimeShutdown,

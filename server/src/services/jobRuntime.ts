@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { getClient, query } from '../database.js'
 import { logger } from '../middleware/logger.js'
 import { runWithJobLeaseFenceContext } from './jobLeaseFenceContext.js'
+import { runWithRuntimeAbortSignal } from './runtimeAbortContext.js'
 import { isScopedBatchOperationError } from './scopedBatchRunner.js'
 
 export type JobTriggerSource = 'scheduler' | 'manual' | 'api'
@@ -163,11 +164,14 @@ async function runAttemptWithDeadline<T>(
   const startedAt = new Date()
   const deadlineAt = new Date(startedAt.getTime() + timeoutMs)
   const token = `${options.jobName}:${options.jobId ?? 'none'}:${attempt}:${++attemptSequence}`
-  const operation = Promise.resolve().then(() => runner(attempt, {
-    attempt,
-    signal: controller.signal,
-    deadlineAt: deadlineAt.toISOString(),
-  }))
+  const operation = runWithRuntimeAbortSignal(
+    controller.signal,
+    () => Promise.resolve().then(() => runner(attempt, {
+      attempt,
+      signal: controller.signal,
+      deadlineAt: deadlineAt.toISOString(),
+    })),
+  )
   const completion = operation.finally(() => {
     activeJobAttempts.delete(token)
   })

@@ -548,6 +548,10 @@ type NormalizedForecastOptions = {
   runtimeConsumerObservationQueryExec?: DurationRuntimeConsumerObservationQueryExec | null
 }
 
+type ForecastExecutionControl = {
+  signal?: AbortSignal
+}
+
 type TaskForecastWorkspaceScope = {
   projectId?: string | null
   visibleProjectIds?: string[] | null
@@ -5937,11 +5941,14 @@ async function refreshTaskDurationForecast(
   taskId: string,
   task: ForecastTaskRow | null,
   options: NormalizedForecastOptions,
+  control: ForecastExecutionControl = {},
 ): Promise<TaskDurationForecast> {
+  throwIfForecastBatchAborted(control.signal)
   const forecastInstant = new Date()
   const projectId = normalizeId(task?.project_id)
   if (!projectId) throw new Error('TASK_DURATION_FORECAST_PROJECT_SCOPE_REQUIRED')
   const factInput = await buildForecastProjectGenerationFactInput(task)
+  throwIfForecastBatchAborted(control.signal)
   let input = {
     suggestionPurpose: 'execution_reference' as const,
     taskId,
@@ -5992,6 +5999,7 @@ async function refreshTaskDurationForecast(
     obstaclesPromise,
     structuredCauseAuthorityPromise,
   ])
+  throwIfForecastBatchAborted(control.signal)
   input = {
     ...input,
     structuredCauseAuthority,
@@ -6007,6 +6015,7 @@ async function refreshTaskDurationForecast(
     earliestStartRulePromise,
     currentForecastPromise,
   ])
+  throwIfForecastBatchAborted(control.signal)
   const effectiveVelocityLearning = hasPublishedProjectBaselineCalibration(suggestion.factorSummary)
     ? null
     : velocityLearning
@@ -6032,7 +6041,9 @@ async function refreshTaskDurationForecast(
     forecastOptions: options,
     now: forecastInstant,
   })
+  throwIfForecastBatchAborted(control.signal)
   const residualOverlays = await loadForecastResidualOverlays(task)
+  throwIfForecastBatchAborted(control.signal)
   forecastDates = applyForecastResidualOverlay({
     forecastDates,
     task,
@@ -6044,6 +6055,7 @@ async function refreshTaskDurationForecast(
     task,
     workCalendar,
   })
+  throwIfForecastBatchAborted(control.signal)
   forecastDates = withT2RhythmForecastContext({
     forecastDates,
     suggestion,
@@ -6052,14 +6064,17 @@ async function refreshTaskDurationForecast(
   try {
     e2DurationInputAssembly = await buildE2DurationInputAssemblyContext(input, suggestion)
   } catch (error) {
+    throwIfForecastBatchAborted(control.signal)
     logger.warn('[taskDurationForecastService] duration input assembly unavailable for E2 remaining forecast', { taskId, error })
   }
+  throwIfForecastBatchAborted(control.signal)
   forecastDates = withDurationInputAssemblyForecastContext({
     forecastDates,
     durationInputAssembly: e2DurationInputAssembly,
   })
 
   await backfillForecastErrorIfCompleted(task, currentForecast, workCalendar)
+  throwIfForecastBatchAborted(control.signal)
   const durationOutputContract = remainingForecastOutputContractSummary()
   const executionReferenceDays = suggestion.recommendedDurationDays
   const executionReferenceDuration = buildConstructionProductionDayDurationMetric(executionReferenceDays, {
@@ -6131,6 +6146,7 @@ async function refreshTaskDurationForecast(
     generated_at: forecastInstant.toISOString(),
   }
 
+  throwIfForecastBatchAborted(control.signal)
   await recordTaskRemainingForecastPredictionEvent({
     taskId,
     task,
@@ -6141,6 +6157,7 @@ async function refreshTaskDurationForecast(
     options,
     generatedAt: String(forecastPayload.generated_at),
   })
+  throwIfForecastBatchAborted(control.signal)
 
   if (options.writePolicy !== 'read_only') {
     const currentForecastId = normalizeId(currentForecast?.id)
@@ -6161,6 +6178,7 @@ async function refreshTaskDurationForecast(
         .insert(forecastPayload)
     }
   }
+  throwIfForecastBatchAborted(control.signal)
 
   logger.info('Duration forecast refreshed', { taskId, source: suggestion.forecastSource, triggerContext: options.triggerContext })
 
@@ -6195,9 +6213,15 @@ async function refreshTaskDurationForecast(
   return forecast
 }
 
-export async function forecastTaskDuration(taskId: string, options?: ForecastTaskDurationOptions): Promise<TaskDurationForecast> {
+async function forecastTaskDurationWithControl(
+  taskId: string,
+  options?: ForecastTaskDurationOptions,
+  control: ForecastExecutionControl = {},
+): Promise<TaskDurationForecast> {
+  throwIfForecastBatchAborted(control.signal)
   const normalizedOptions = normalizeForecastOptions(options)
   const task = await loadTask(taskId, normalizedOptions)
+  throwIfForecastBatchAborted(control.signal)
   if (task && !hasTaskExecutionFactAuthority(task)) {
     return buildExecutionFactAuthorityUnavailableForecast(taskId, task)
   }
@@ -6205,8 +6229,10 @@ export async function forecastTaskDuration(taskId: string, options?: ForecastTas
   if (normalizedOptions.useCache) {
     const now = new Date()
     const currentForecast = await loadCurrentForecast(taskId, normalizedOptions)
+    throwIfForecastBatchAborted(control.signal)
     if (isFreshCurrentForecast(currentForecast, now)) {
       const calendars = await loadTaskWorkCalendars([taskId], normalizedOptions)
+      throwIfForecastBatchAborted(control.signal)
       const cachedForecast = mapCurrentForecastToTaskDurationForecast(
         taskId,
         currentForecast,
@@ -6219,7 +6245,8 @@ export async function forecastTaskDuration(taskId: string, options?: ForecastTas
     }
   }
 
-  const forecast = await refreshTaskDurationForecast(taskId, task, normalizedOptions)
+  const forecast = await refreshTaskDurationForecast(taskId, task, normalizedOptions, control)
+  throwIfForecastBatchAborted(control.signal)
   const runtimeArtifactPublications = buildTaskDurationForecastRuntimeArtifactPublications(forecast)
   const artifacts = buildTaskDurationForecastConsumedArtifacts({
     forecast,
@@ -6256,13 +6283,19 @@ export async function forecastTaskDuration(taskId: string, options?: ForecastTas
       artifacts,
     })
   } catch (error) {
+    throwIfForecastBatchAborted(control.signal)
     logger.warn('[taskDurationForecastService] failed to record task duration runtime consumer evidence', {
       taskId: forecast.taskId,
       projectId: task?.project_id ?? null,
       error,
     })
   }
+  throwIfForecastBatchAborted(control.signal)
   return forecast
+}
+
+export async function forecastTaskDuration(taskId: string, options?: ForecastTaskDurationOptions): Promise<TaskDurationForecast> {
+  return forecastTaskDurationWithControl(taskId, options)
 }
 
 function toGovernedDurationForecastSignal(forecast: TaskDurationForecast) {
@@ -6351,7 +6384,22 @@ export async function analyzeTaskDelayRiskWithDurationForecast(
   }
 }
 
-export async function forecastBatchTasks(taskIds: string[], options?: ForecastTaskDurationOptions): Promise<TaskDurationForecast[]> {
+type ForecastBatchExecutionControl = ForecastExecutionControl & {
+  shouldStartTask?: () => boolean
+}
+
+function throwIfForecastBatchAborted(signal?: AbortSignal) {
+  if (!signal?.aborted) return
+  throw signal.reason instanceof Error
+    ? signal.reason
+    : new Error('Task duration forecast batch aborted')
+}
+
+async function forecastBatchTaskResults(
+  taskIds: string[],
+  options?: ForecastTaskDurationOptions,
+  control: ForecastBatchExecutionControl = {},
+) {
   const uniqueTaskIds = [...new Set(taskIds.map(normalizeId).filter((id): id is string => Boolean(id)))]
   const results: Array<TaskDurationForecast | null> = Array(uniqueTaskIds.length).fill(null)
   const normalizedOptions = normalizeForecastOptions({
@@ -6360,14 +6408,21 @@ export async function forecastBatchTasks(taskIds: string[], options?: ForecastTa
   })
 
   let cursor = 0
+  let attempted = 0
   const worker = async () => {
     while (cursor < uniqueTaskIds.length) {
+      throwIfForecastBatchAborted(control.signal)
+      if (control.shouldStartTask && !control.shouldStartTask()) return
       const index = cursor
       cursor += 1
+      attempted += 1
       const id = uniqueTaskIds[index]
       try {
-        results[index] = await forecastTaskDuration(id, normalizedOptions)
+        const forecast = await forecastTaskDurationWithControl(id, normalizedOptions, control)
+        throwIfForecastBatchAborted(control.signal)
+        results[index] = forecast
       } catch (err) {
+        throwIfForecastBatchAborted(control.signal)
         logger.error('Failed to forecast task duration', { taskId: id, error: err })
       }
     }
@@ -6377,7 +6432,14 @@ export async function forecastBatchTasks(taskIds: string[], options?: ForecastTa
     Array.from({ length: Math.min(FORECAST_BATCH_CONCURRENCY, uniqueTaskIds.length) }, () => worker()),
   )
 
-  return results.filter((forecast): forecast is TaskDurationForecast => Boolean(forecast))
+  return {
+    attempted,
+    forecasts: results.filter((forecast): forecast is TaskDurationForecast => Boolean(forecast)),
+  }
+}
+
+export async function forecastBatchTasks(taskIds: string[], options?: ForecastTaskDurationOptions): Promise<TaskDurationForecast[]> {
+  return (await forecastBatchTaskResults(taskIds, options)).forecasts
 }
 
 export async function listCurrentTaskDurationForecasts(
@@ -6416,6 +6478,7 @@ export type DailyTaskDurationForecastRefreshOptions = {
   batchSize?: number
   maxRuntimeMs?: number
   freshnessSloMs?: number
+  signal?: AbortSignal
 }
 
 export type DailyTaskDurationForecastRefreshResult = {
@@ -6499,6 +6562,7 @@ export async function refreshDailyActiveTaskDurationForecasts(
 ): Promise<DailyTaskDurationForecastRefreshResult> {
   const startedAtMs = Date.now()
   const params = normalizeDailyRefreshOptions(options)
+  throwIfForecastBatchAborted(options?.signal)
   const { data, error } = await (supabase as any)
     .from('tasks')
     .select('id, project_id')
@@ -6507,6 +6571,7 @@ export async function refreshDailyActiveTaskDurationForecasts(
     .is('actual_end_date', null)
     .order('updated_at', { ascending: false })
     .limit(params.limit)
+  throwIfForecastBatchAborted(options?.signal)
 
   if (error) {
     logger.warn('[taskDurationForecastService] failed to load active tasks for daily duration forecast refresh', { error })
@@ -6531,6 +6596,7 @@ export async function refreshDailyActiveTaskDurationForecasts(
     params.freshnessSloMs,
     startedAtMs,
   )
+  throwIfForecastBatchAborted(options?.signal)
   let refreshed = 0
   let failed = 0
   let skippedByTimeBudget = 0
@@ -6546,14 +6612,22 @@ export async function refreshDailyActiveTaskDurationForecasts(
     const batch = taskIds.slice(index, index + params.batchSize)
     batchesAttempted += 1
     try {
-      const forecasts = await forecastBatchTasks(batch, {
+      const batchResult = await forecastBatchTaskResults(batch, {
         triggerContext: 'daily_dashboard_refresh',
         useCache: false,
         visibleProjectIds,
+      }, {
+        signal: options?.signal,
+        shouldStartTask: () => Date.now() - startedAtMs < params.maxRuntimeMs,
       })
-      refreshed += forecasts.length
-      failed += Math.max(0, batch.length - forecasts.length)
+      refreshed += batchResult.forecasts.length
+      failed += Math.max(0, batchResult.attempted - batchResult.forecasts.length)
+      if (batchResult.attempted < batch.length) {
+        skippedByTimeBudget = taskIds.length - index - batchResult.attempted
+        break
+      }
     } catch (error) {
+      throwIfForecastBatchAborted(options?.signal)
       failed += batch.length
       logger.warn('[taskDurationForecastService] daily duration forecast batch failed', {
         taskIds: batch,
@@ -6569,6 +6643,7 @@ export async function refreshDailyActiveTaskDurationForecasts(
     params.freshnessSloMs,
     finishedAtMs,
   )
+  throwIfForecastBatchAborted(options?.signal)
   return {
     scanned: taskIds.length,
     refreshed,
