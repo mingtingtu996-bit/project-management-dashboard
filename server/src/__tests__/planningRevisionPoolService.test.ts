@@ -822,6 +822,7 @@ describe('planning revision pool service', () => {
           'manual_override_fields',
           'generation_metadata',
         ],
+        maxRowsPerQuery: 10,
       },
     )
     expect(state.writeLog).toHaveBeenCalledWith(

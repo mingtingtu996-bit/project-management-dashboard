@@ -570,6 +570,7 @@ function nowIso() {
 
 type DataQualityQueryExec = typeof rawQuery
 type DataQualityTransactionRunner = <T>(work: () => Promise<T>) => Promise<T>
+const DATA_QUALITY_FINDING_UPSERT_BATCH_SIZE = 500
 
 export async function persistDataQualityFindingsDirect(options: {
   projectId: string
@@ -612,8 +613,10 @@ export async function persistDataQualityFindingsDirect(options: {
     })
 
     if (upsertPayload.length > 0) {
-      await queryExec(
-        `INSERT INTO public.data_quality_findings (
+      for (let offset = 0; offset < upsertPayload.length; offset += DATA_QUALITY_FINDING_UPSERT_BATCH_SIZE) {
+        const batch = upsertPayload.slice(offset, offset + DATA_QUALITY_FINDING_UPSERT_BATCH_SIZE)
+        await queryExec(
+          `INSERT INTO public.data_quality_findings AS existing (
            id, finding_key, project_id, task_id, rule_code, rule_type, severity,
            dimension_key, summary, details_json, detected_at, resolved_at, status,
            entity_type, entity_id, quality_dimension, source_type, resolved_type
@@ -668,9 +671,43 @@ export async function persistDataQualityFindingsDirect(options: {
                entity_id = EXCLUDED.entity_id,
                quality_dimension = EXCLUDED.quality_dimension,
                source_type = EXCLUDED.source_type,
-               resolved_type = NULL`,
-        [JSON.stringify(upsertPayload)],
-      )
+               resolved_type = NULL
+         WHERE ROW(
+                 existing.project_id,
+                 existing.task_id,
+                 existing.rule_code,
+                 existing.rule_type,
+                 existing.severity,
+                 existing.dimension_key,
+                 existing.summary,
+                 existing.details_json,
+                 existing.resolved_at,
+                 existing.status,
+                 existing.entity_type,
+                 existing.entity_id,
+                 existing.quality_dimension,
+                 existing.source_type,
+                 existing.resolved_type
+               ) IS DISTINCT FROM ROW(
+                 EXCLUDED.project_id,
+                 EXCLUDED.task_id,
+                 EXCLUDED.rule_code,
+                 EXCLUDED.rule_type,
+                 EXCLUDED.severity,
+                 EXCLUDED.dimension_key,
+                 EXCLUDED.summary,
+                 EXCLUDED.details_json,
+                 EXCLUDED.resolved_at,
+                 EXCLUDED.status,
+                 EXCLUDED.entity_type,
+                 EXCLUDED.entity_id,
+                 EXCLUDED.quality_dimension,
+                 EXCLUDED.source_type,
+                 EXCLUDED.resolved_type
+               )`,
+          [JSON.stringify(batch)],
+        )
+      }
     }
 
     const staleIds = existing

@@ -184,6 +184,26 @@ export function buildRiskPendingManualClosePatch() {
   } satisfies Partial<Risk>
 }
 
+export function buildRiskSourceResolvedAutoClosePatch(context: {
+  taskId: string
+  recordedAt?: string
+}) {
+  const recordedAt = context.recordedAt ?? new Date().toISOString()
+  return {
+    status: 'closed',
+    pending_manual_close: false,
+    closed_reason: 'source_resolved_auto',
+    closed_at: recordedAt,
+    closure_result_code: 'resolved',
+    closure_result_summary: 'Delay-source risk closed automatically after the linked task completed.',
+    closure_effectiveness: 'resolved',
+    closure_evidence_refs: [`task:${context.taskId}:completed`],
+    closure_cause_attribution_id: null,
+    closed_by: null,
+    closure_recorded_at: recordedAt,
+  } satisfies Partial<Risk>
+}
+
 export function buildRiskConfirmClosePatch(outcome: RiskIssueClosureOutcomeInput, actorId: string) {
   return {
     status: 'closed',

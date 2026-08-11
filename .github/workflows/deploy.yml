@@ -954,6 +954,40 @@ jobs:
               ;;
           esac
 
+      - name: Authorize construction dependency replay runtime RLS 337
+        if: steps.migration-config.outputs.can_run == 'true'
+        env:
+          DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          CONSTRUCTION_DEPENDENCY_REPLAY_RUNTIME_RLS_APPROVED_SHA: ${{ vars.MIGRATION_337_APPROVED_SHA }}
+          CONSTRUCTION_DEPENDENCY_REPLAY_RUNTIME_RLS_STAGING_EVIDENCE_REF: ${{ vars.MIGRATION_337_STAGING_EVIDENCE_REF }}
+        run: |
+          set -euo pipefail
+          plan_output="$(npm run --silent migrate:plan)"
+          if ! grep -Fq -- "337_construction_dependency_replay_runtime_rls.sql" <<< "$plan_output"; then
+            exit 0
+          fi
+
+          if [ "$CONSTRUCTION_DEPENDENCY_REPLAY_RUNTIME_RLS_APPROVED_SHA" != "$GITHUB_SHA" ]; then
+            echo "Migration 337 is not approved for this exact $DEPLOY_TARGET SHA." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          case "$DEPLOY_TARGET" in
+            staging)
+              echo "Migration 337 is approved for this exact staging SHA." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            production)
+              if [[ ! "$CONSTRUCTION_DEPENDENCY_REPLAY_RUNTIME_RLS_STAGING_EVIDENCE_REF" =~ ^https://github\.com/mingtingtu996-bit/project-management-dashboard/actions/runs/[0-9]+$ ]]; then
+                echo "Migration 337 production promotion requires successful staging readback evidence from a deployment run URL." >> "$GITHUB_STEP_SUMMARY"
+                exit 1
+              fi
+              ;;
+            *)
+              echo "Migration 337 is restricted to staging-first, then production promotion." >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+              ;;
+          esac
+
       - name: Authorize duration learning legacy runtime retirement 322
         id: duration-learning-retirement-322
         if: steps.migration-config.outputs.can_run == 'true'

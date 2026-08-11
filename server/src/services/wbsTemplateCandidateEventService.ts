@@ -983,14 +983,14 @@ async function recordWbsTemplateCandidateEventAtomically(
          accepted_candidates, rejected_candidates, pending_candidates,
          acceptance_rate, metadata, created_at, updated_at
        )
-        select $2::uuid, $6, $17, $22, $23, $24, $25,
-               case when $22::integer > 0 then $23::real / $22::real else null end,
-              jsonb_build_object(
-                'last_generation_batch_id', $5,
-                 'last_generated_row_count', $22,
-                 'last_retained_row_count', $23,
-                 'last_rejected_row_count', $24,
-                 'last_pending_row_count', $25,
+         select $2::uuid, $6, $17, $22::integer, $23::integer, $24::integer, $25::integer,
+                case when $22::integer > 0 then $23::integer::real / $22::integer::real else null end,
+               jsonb_build_object(
+                 'last_generation_batch_id', $5,
+                  'last_generated_row_count', $22::integer,
+                  'last_retained_row_count', $23::integer,
+                  'last_rejected_row_count', $24::integer,
+                  'last_pending_row_count', $25::integer,
                 'last_surface', $4,
                 'updated_from', 'duration_learning_runtime_evidence_outbox',
                 'duration_learning_outbox_event_key', $18

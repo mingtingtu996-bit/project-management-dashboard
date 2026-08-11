@@ -18,6 +18,7 @@ import { notificationTouchpointService } from './notificationTouchpointService.j
 import {
   buildIssuePendingManualClosePatch,
   buildRiskPendingManualClosePatch,
+  buildRiskSourceResolvedAutoClosePatch,
   computeDynamicIssuePriority,
   getIssueBasePriority,
   isProtectedIssueRecord,
@@ -496,11 +497,7 @@ export async function closeDelaySourceRisksForCompletedTask(taskId: string, proj
 
     const updated = await dbUpdateRisk(
       row.id,
-      {
-        status: 'closed',
-        pending_manual_close: false,
-        closed_reason: 'source_resolved_auto',
-      },
+      buildRiskSourceResolvedAutoClosePatch({ taskId: normalizedTaskId }),
       row.version,
       'system_auto',
     )

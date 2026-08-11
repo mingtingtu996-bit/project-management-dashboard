@@ -845,6 +845,7 @@ export async function startRevisionFromBaseline(params: {
       if (clonedItems.length > 0) {
         const insertedItems = await insertRowsReturning(client, 'task_baseline_items', clonedItems, {
           jsonColumns: TASK_BASELINE_ITEM_JSON_COLUMNS,
+          maxRowsPerQuery: 10,
         })
         if (insertedItems.length !== clonedItems.length) {
           throw new PlanningRevisionPoolServiceError(
