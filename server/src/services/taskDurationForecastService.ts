@@ -6213,7 +6213,7 @@ async function refreshTaskDurationForecast(
   return forecast
 }
 
-async function forecastTaskDurationWithControl(
+export async function forecastTaskDuration(
   taskId: string,
   options?: ForecastTaskDurationOptions,
   control: ForecastExecutionControl = {},
@@ -6292,10 +6292,6 @@ async function forecastTaskDurationWithControl(
   }
   throwIfForecastBatchAborted(control.signal)
   return forecast
-}
-
-export async function forecastTaskDuration(taskId: string, options?: ForecastTaskDurationOptions): Promise<TaskDurationForecast> {
-  return forecastTaskDurationWithControl(taskId, options)
 }
 
 function toGovernedDurationForecastSignal(forecast: TaskDurationForecast) {
@@ -6418,7 +6414,7 @@ async function forecastBatchTaskResults(
       attempted += 1
       const id = uniqueTaskIds[index]
       try {
-        const forecast = await forecastTaskDurationWithControl(id, normalizedOptions, control)
+        const forecast = await forecastTaskDuration(id, normalizedOptions, control)
         throwIfForecastBatchAborted(control.signal)
         results[index] = forecast
       } catch (err) {
