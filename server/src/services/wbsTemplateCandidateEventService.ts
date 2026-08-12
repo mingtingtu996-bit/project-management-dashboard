@@ -993,7 +993,7 @@ async function recordWbsTemplateCandidateEventAtomically(
                   'last_pending_row_count', $25::integer,
                 'last_surface', $4,
                 'updated_from', 'duration_learning_runtime_evidence_outbox',
-                'duration_learning_outbox_event_key', $18
+                'duration_learning_outbox_event_key', $18::text
               ),
               now(), now()
           from inserted_event
