@@ -23,7 +23,7 @@ on:
           - domain_hsts
           - temporary_ip_tls
       initial_runtime_bootstrap_confirmation:
-        description: Type INGRESS_READY_UPSTREAM_UNAVAILABLE when enabling the one-time bootstrap path
+        description: Type INGRESS_READY_UPSTREAM_UNAVAILABLE (staging) or PRODUCTION_EMPTY_ROOT_BOOTSTRAP (production)
         required: false
         default: ''
         type: string
@@ -438,6 +438,8 @@ jobs:
       PUBLIC_INGRESS_MODE: ${{ github.event.inputs.public_ingress_mode }}
       INITIAL_RUNTIME_BOOTSTRAP: ${{ github.event.inputs.initial_runtime_bootstrap_confirmation == 'INGRESS_READY_UPSTREAM_UNAVAILABLE' && 'true' || 'false' }}
       INITIAL_RUNTIME_BOOTSTRAP_CONFIRMATION: ${{ github.event.inputs.initial_runtime_bootstrap_confirmation }}
+      PRODUCTION_EMPTY_ROOT_BOOTSTRAP: ${{ github.event.inputs.initial_runtime_bootstrap_confirmation == 'PRODUCTION_EMPTY_ROOT_BOOTSTRAP' && 'true' || 'false' }}
+      PRODUCTION_EMPTY_ROOT_BOOTSTRAP_CONFIRMATION: ${{ github.event.inputs.initial_runtime_bootstrap_confirmation }}
       EXPECTED_PUBLIC_HOST: ${{ vars[format('{0}_DEPLOY_PUBLIC_HOST', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
     steps:
       - name: Checkout code
@@ -516,19 +518,30 @@ jobs:
 
           ingress_classification="$(node scripts/classify-public-ingress-url.mjs --url "$DEPLOY_HEALTH_URL" --redirect-url "$DEPLOY_HTTP_REDIRECT_URL" --environment "$DEPLOY_TARGET" --expected-host "$EXPECTED_PUBLIC_HOST" --expected-mode "$PUBLIC_INGRESS_MODE")"
 
-          if [ "$INITIAL_RUNTIME_BOOTSTRAP" = "true" ]; then
+          if [ "$INITIAL_RUNTIME_BOOTSTRAP" = "true" ] || [ "$PRODUCTION_EMPTY_ROOT_BOOTSTRAP" = "true" ]; then
             [ "$PUBLIC_INGRESS_MODE" = "domain_hsts" ] || {
-              echo "Initial runtime bootstrap requires domain_hsts ingress." >&2
+              echo "Runtime bootstrap requires domain_hsts ingress." >&2
               exit 1
             }
-            [ "$DEPLOY_TARGET" = staging ] || {
-              echo "Origin-direct runtime bootstrap is restricted to staging; production requires public-domain readiness." >&2
-              exit 1
-            }
-            [ "$INITIAL_RUNTIME_BOOTSTRAP_CONFIRMATION" = "INGRESS_READY_UPSTREAM_UNAVAILABLE" ] || {
-              echo "Initial runtime bootstrap confirmation is missing or invalid." >&2
-              exit 1
-            }
+            if [ "$INITIAL_RUNTIME_BOOTSTRAP" = "true" ]; then
+              [ "$DEPLOY_TARGET" = staging ] || {
+                echo "Origin-direct runtime bootstrap is restricted to staging." >&2
+                exit 1
+              }
+              [ "$INITIAL_RUNTIME_BOOTSTRAP_CONFIRMATION" = "INGRESS_READY_UPSTREAM_UNAVAILABLE" ] || {
+                echo "Initial runtime bootstrap confirmation is missing or invalid." >&2
+                exit 1
+              }
+            else
+              [ "$DEPLOY_TARGET" = production ] || {
+                echo "Production empty-root bootstrap is restricted to production." >&2
+                exit 1
+              }
+              [ "$PRODUCTION_EMPTY_ROOT_BOOTSTRAP_CONFIRMATION" = "PRODUCTION_EMPTY_ROOT_BOOTSTRAP" ] || {
+                echo "Production empty-root bootstrap confirmation is missing or invalid." >&2
+                exit 1
+              }
+            fi
           fi
 
           resolve_origin_ipv4() {
@@ -584,7 +597,8 @@ jobs:
               --write-out '%{http_code}' "$DEPLOY_HEALTH_URL" 2>/dev/null)" || readyz_status=000
             if [ "$readyz_status" = 200 ]; then
               verify_readyz_identity "$readyz_file" || return 1
-            elif [ "$readyz_status" = 502 ] && [ "$INITIAL_RUNTIME_BOOTSTRAP" = true ]; then
+            elif { [ "$readyz_status" = 502 ] && [ "$INITIAL_RUNTIME_BOOTSTRAP" = true ]; } \
+              || { [ "$readyz_status" = 502 ] && [ "$PRODUCTION_EMPTY_ROOT_BOOTSTRAP" = true ]; }; then
               :
             else
               return 1
@@ -604,6 +618,8 @@ jobs:
 
           origin_ingress_ready=false
           public_domain_ready=false
+          origin_readyz_status=000
+          public_readyz_status=000
           predeploy_runtime_classification=runtime_ready
           if [ "$PUBLIC_INGRESS_MODE" = domain_hsts ]; then
             origin_ip="$(resolve_origin_ipv4)"
@@ -614,7 +630,22 @@ jobs:
             origin_ingress_ready=true
           fi
           if public_readyz_status="$(probe_ingress_route public)"; then
-            public_domain_ready=true
+            if [ "$public_readyz_status" = 200 ]; then
+              public_domain_ready=true
+            elif [ "$public_readyz_status" = 502 ] \
+              && [ "$PRODUCTION_EMPTY_ROOT_BOOTSTRAP" = true ] \
+              && [ "$DEPLOY_TARGET" = production ]; then
+              public_domain_ready=false
+              fallback_state_note="productionEmptyRootBootstrap=true publicDomainReady=false (pre-deploy only)"
+            elif [ "$public_readyz_status" = 502 ] \
+              && [ "$INITIAL_RUNTIME_BOOTSTRAP" = true ] \
+              && [ "$DEPLOY_TARGET" = staging ]; then
+              public_domain_ready=false
+              fallback_state_note="originIngressReady=$origin_ingress_ready publicDomainReady=false"
+            else
+              echo "Public-domain preflight returned an unsupported runtime state." >&2
+              exit 1
+            fi
           elif [ "$INITIAL_RUNTIME_BOOTSTRAP" = true ] \
             && [ "$DEPLOY_TARGET" = staging ] \
             && [ "$origin_ingress_ready" = true ]; then
@@ -624,7 +655,7 @@ jobs:
             echo "Public-domain preflight failed and origin fallback is not authorized." >&2
             exit 1
           fi
-          if [ "${origin_readyz_status:-$public_readyz_status}" = 502 ]; then
+          if [ "$public_readyz_status" = 502 ] || [ "$origin_readyz_status" = 502 ]; then
             predeploy_runtime_classification=ingress_ready_upstream_unavailable
           fi
           if [ "$PUBLIC_INGRESS_MODE" = "temporary_ip_tls" ]; then
@@ -767,6 +798,29 @@ jobs:
           '
           unset supabase_runtime_key
           REMOTE
+
+      - name: Verify production empty-root bootstrap state
+        id: production-empty-root-bootstrap-preflight
+        if: github.event.inputs.environment == 'production'
+        env:
+          DEPLOY_HOST: ${{ secrets.PRODUCTION_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.PRODUCTION_DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.PRODUCTION_DEPLOY_PORT || '22' }}
+          DEPLOY_PATH: ${{ secrets.PRODUCTION_DEPLOY_PATH }}
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.PRODUCTION_DEPLOY_SSH_PRIVATE_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.PRODUCTION_DEPLOY_KNOWN_HOSTS }}
+          PRODUCTION_EMPTY_ROOT_BOOTSTRAP_CONFIRMATION: ${{ github.event.inputs.initial_runtime_bootstrap_confirmation }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > ~/.ssh/project-management-deploy
+          chmod 600 ~/.ssh/project-management-deploy
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          remote_command="$(printf 'bash -s -- %q %q' "$DEPLOY_PATH" "$PRODUCTION_EMPTY_ROOT_BOOTSTRAP_CONFIRMATION")"
+          report="$(ssh -i ~/.ssh/project-management-deploy -p "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" "$remote_command" < scripts/check-production-empty-root-bootstrap.sh)"
+          printf '%s\n' "$report" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Verify deployment target database identity
         env:
@@ -1403,6 +1457,8 @@ jobs:
           PUBLIC_INGRESS_MODE: ${{ github.event.inputs.public_ingress_mode }}
           EXPECTED_PUBLIC_HOST: ${{ vars[format('{0}_DEPLOY_PUBLIC_HOST', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
           INITIAL_RUNTIME_BOOTSTRAP: ${{ github.event.inputs.initial_runtime_bootstrap_confirmation == 'INGRESS_READY_UPSTREAM_UNAVAILABLE' && 'true' || 'false' }}
+          PRODUCTION_EMPTY_ROOT_BOOTSTRAP: ${{ github.event.inputs.initial_runtime_bootstrap_confirmation == 'PRODUCTION_EMPTY_ROOT_BOOTSTRAP' && 'true' || 'false' }}
+          PRODUCTION_EMPTY_ROOT_BOOTSTRAP_CONFIRMATION: ${{ github.event.inputs.initial_runtime_bootstrap_confirmation }}
           EXPECTED_JWT_SECRET_SHA256: ${{ secrets[format('{0}_JWT_SECRET_SHA256', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
           PEER_JWT_SECRET_SHA256: ${{ secrets[format('{0}_PEER_JWT_SECRET_SHA256', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
           PEER_DEPLOY_PATH: ${{ vars[format('{0}_PEER_DEPLOY_PATH', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
@@ -1468,6 +1524,8 @@ jobs:
           PUBLIC_INGRESS_MODE: ${{ github.event.inputs.public_ingress_mode }}
           EXPECTED_PUBLIC_HOST: ${{ vars[format('{0}_DEPLOY_PUBLIC_HOST', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
           INITIAL_RUNTIME_BOOTSTRAP: ${{ github.event.inputs.initial_runtime_bootstrap_confirmation == 'INGRESS_READY_UPSTREAM_UNAVAILABLE' && 'true' || 'false' }}
+          PRODUCTION_EMPTY_ROOT_BOOTSTRAP: ${{ github.event.inputs.initial_runtime_bootstrap_confirmation == 'PRODUCTION_EMPTY_ROOT_BOOTSTRAP' && 'true' || 'false' }}
+          PRODUCTION_EMPTY_ROOT_BOOTSTRAP_CONFIRMATION: ${{ github.event.inputs.initial_runtime_bootstrap_confirmation }}
           EXPECTED_JWT_SECRET_SHA256: ${{ secrets[format('{0}_JWT_SECRET_SHA256', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
           PEER_JWT_SECRET_SHA256: ${{ secrets[format('{0}_PEER_JWT_SECRET_SHA256', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
           PEER_DEPLOY_PATH: ${{ vars[format('{0}_PEER_DEPLOY_PATH', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
@@ -1502,7 +1560,7 @@ jobs:
             -p "$DEPLOY_PORT" \
             -o IdentitiesOnly=yes \
             "$DEPLOY_USER@$DEPLOY_HOST" \
-            "APP_DIR=\"$DEPLOY_PATH\" RELEASE_SHA=\"$RELEASE_SHA\" DEPLOY_TARGET=\"$DEPLOY_TARGET\" RELEASE_ARCHIVE=\"$RELEASE_ARCHIVE\" PUBLIC_INGRESS_MODE=\"$PUBLIC_INGRESS_MODE\" EXPECTED_PUBLIC_HOST=\"$EXPECTED_PUBLIC_HOST\" HEALTH_URL=\"${DEPLOY_HEALTH_URL:-}\" HTTP_REDIRECT_URL=\"${DEPLOY_HTTP_REDIRECT_URL:-}\" INITIAL_RUNTIME_BOOTSTRAP=\"$INITIAL_RUNTIME_BOOTSTRAP\" ORIGIN_INGRESS_IP=\"$ORIGIN_INGRESS_IP\" EXPECTED_JWT_SECRET_SHA256=\"$EXPECTED_JWT_SECRET_SHA256\" PEER_JWT_SECRET_SHA256=\"$PEER_JWT_SECRET_SHA256\" PEER_RUNTIME_ENV_FILE=\"$PEER_DEPLOY_PATH/deploy/env/server.production.env\" bash -s" < scripts/deploy-lighthouse-server.sh
+            "APP_DIR=\"$DEPLOY_PATH\" RELEASE_SHA=\"$RELEASE_SHA\" DEPLOY_TARGET=\"$DEPLOY_TARGET\" RELEASE_ARCHIVE=\"$RELEASE_ARCHIVE\" PUBLIC_INGRESS_MODE=\"$PUBLIC_INGRESS_MODE\" EXPECTED_PUBLIC_HOST=\"$EXPECTED_PUBLIC_HOST\" HEALTH_URL=\"${DEPLOY_HEALTH_URL:-}\" HTTP_REDIRECT_URL=\"${DEPLOY_HTTP_REDIRECT_URL:-}\" INITIAL_RUNTIME_BOOTSTRAP=\"$INITIAL_RUNTIME_BOOTSTRAP\" PRODUCTION_EMPTY_ROOT_BOOTSTRAP=\"$PRODUCTION_EMPTY_ROOT_BOOTSTRAP\" PRODUCTION_EMPTY_ROOT_BOOTSTRAP_CONFIRMATION=\"$PRODUCTION_EMPTY_ROOT_BOOTSTRAP_CONFIRMATION\" ORIGIN_INGRESS_IP=\"$ORIGIN_INGRESS_IP\" EXPECTED_JWT_SECRET_SHA256=\"$EXPECTED_JWT_SECRET_SHA256\" PEER_JWT_SECRET_SHA256=\"$PEER_JWT_SECRET_SHA256\" PEER_RUNTIME_ENV_FILE=\"$PEER_DEPLOY_PATH/deploy/env/server.production.env\" bash -s" < scripts/deploy-lighthouse-server.sh
 
       - name: Verify API port is not externally reachable
         if: ${{ steps.deployment-eligibility.outputs.can_deploy == 'true' }}

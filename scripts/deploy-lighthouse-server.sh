@@ -13,6 +13,8 @@ HTTP_REDIRECT_URL="${HTTP_REDIRECT_URL:-}"
 PUBLIC_INGRESS_MODE="${PUBLIC_INGRESS_MODE:-}"
 EXPECTED_PUBLIC_HOST="${EXPECTED_PUBLIC_HOST:-}"
 INITIAL_RUNTIME_BOOTSTRAP="${INITIAL_RUNTIME_BOOTSTRAP:-false}"
+PRODUCTION_EMPTY_ROOT_BOOTSTRAP="${PRODUCTION_EMPTY_ROOT_BOOTSTRAP:-false}"
+PRODUCTION_EMPTY_ROOT_BOOTSTRAP_CONFIRMATION="${PRODUCTION_EMPTY_ROOT_BOOTSTRAP_CONFIRMATION:-}"
 ORIGIN_INGRESS_IP="${ORIGIN_INGRESS_IP:-}"
 EXPECTED_JWT_SECRET_SHA256="${EXPECTED_JWT_SECRET_SHA256:-}"
 PEER_JWT_SECRET_SHA256="${PEER_JWT_SECRET_SHA256:-}"
@@ -35,10 +37,19 @@ case "$HEALTH_URL" in https://*) ;; *) echo "External deployment health URL must
 case "$HTTP_REDIRECT_URL" in http://*) ;; *) echo "External deployment redirect URL must use http://." >&2; exit 1 ;; esac
 case "$PUBLIC_INGRESS_MODE" in domain_hsts|temporary_ip_tls) ;; *) echo "Unsupported PUBLIC_INGRESS_MODE." >&2; exit 1 ;; esac
 case "$INITIAL_RUNTIME_BOOTSTRAP" in true|false) ;; *) echo "INITIAL_RUNTIME_BOOTSTRAP must be true or false." >&2; exit 1 ;; esac
+case "$PRODUCTION_EMPTY_ROOT_BOOTSTRAP" in true|false) ;; *) echo "PRODUCTION_EMPTY_ROOT_BOOTSTRAP must be true or false." >&2; exit 1 ;; esac
 if [ "$INITIAL_RUNTIME_BOOTSTRAP" = true ]; then
   [ "$DEPLOY_TARGET" = staging ] || { echo "Origin-direct bootstrap is restricted to staging." >&2; exit 1; }
   [ "$PUBLIC_INGRESS_MODE" = domain_hsts ] || { echo "Origin-direct bootstrap requires domain_hsts ingress." >&2; exit 1; }
   : "${ORIGIN_INGRESS_IP:?ORIGIN_INGRESS_IP is required for origin-direct bootstrap}"
+fi
+if [ "$PRODUCTION_EMPTY_ROOT_BOOTSTRAP" = true ]; then
+  [ "$DEPLOY_TARGET" = production ] || { echo "Production empty-root bootstrap is restricted to production." >&2; exit 1; }
+  [ "$PUBLIC_INGRESS_MODE" = domain_hsts ] || { echo "Production empty-root bootstrap requires domain_hsts ingress." >&2; exit 1; }
+  [ "$PRODUCTION_EMPTY_ROOT_BOOTSTRAP_CONFIRMATION" = PRODUCTION_EMPTY_ROOT_BOOTSTRAP ] || {
+    echo "Production empty-root bootstrap confirmation is missing or invalid." >&2
+    exit 1
+  }
 fi
 case "$APP_DIR" in "~") APP_DIR="$HOME" ;; "~/"*) APP_DIR="$HOME/${APP_DIR#"~/"}" ;; esac
 [ -d "$APP_DIR" ] || { echo "Application root does not exist: $APP_DIR" >&2; exit 1; }
@@ -56,9 +67,100 @@ STABLE_DATA_DIR="$APP_DIR/deploy/data"
 CANDIDATE_DIR=''
 RELEASE_DIR="$RELEASES_DIR/$RELEASE_SHA"
 
-mkdir -p "$RELEASES_DIR" "$FAILED_RELEASES_DIR" "$STABLE_DATA_DIR/logs"
 exec 9>"$APP_DIR/.deploy.lock"
 flock -n 9 || { echo "Another application deployment is active." >&2; exit 3; }
+
+verify_production_empty_root_bootstrap() {
+  local lock_mode="${1:-}"
+  [ "$PRODUCTION_EMPTY_ROOT_BOOTSTRAP" = true ] || return 0
+  [ "$lock_mode" = lock-held-by-caller ] || {
+    echo "Production empty-root bootstrap must be checked while holding the deployment lock." >&2
+    return 1
+  }
+  [ ! -e "$CURRENT_LINK" ] && [ ! -L "$CURRENT_LINK" ] || {
+    echo "Production empty-root bootstrap requires no current release pointer." >&2
+    return 1
+  }
+  [ ! -e "$CURRENT_NEXT_LINK" ] && [ ! -L "$CURRENT_NEXT_LINK" ] || {
+    echo "Production empty-root bootstrap requires no pending current pointer." >&2
+    return 1
+  }
+  [ ! -e "$STATE_FILE" ] && [ ! -L "$STATE_FILE" ] || {
+    echo "Production empty-root bootstrap requires no pending activation state." >&2
+    return 1
+  }
+  local release_entry='' failed_release_entry='' socket_table=''
+  if [ -e "$RELEASES_DIR" ] || [ -L "$RELEASES_DIR" ]; then
+    [ -d "$RELEASES_DIR" ] && [ ! -L "$RELEASES_DIR" ] || {
+      echo "Production empty-root bootstrap could not inspect the releases directory." >&2
+      return 1
+    }
+    release_entry="$(find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -print -quit)" || {
+      echo "Production empty-root bootstrap could not inspect the releases directory." >&2
+      return 1
+    }
+  fi
+  if [ -n "$release_entry" ]; then
+    echo "Production empty-root bootstrap requires no managed releases." >&2
+    return 1
+  fi
+  if [ -e "$FAILED_RELEASES_DIR" ] || [ -L "$FAILED_RELEASES_DIR" ]; then
+    [ -d "$FAILED_RELEASES_DIR" ] && [ ! -L "$FAILED_RELEASES_DIR" ] || {
+      echo "Production empty-root bootstrap could not inspect the failed releases directory." >&2
+      return 1
+    }
+    failed_release_entry="$(find "$FAILED_RELEASES_DIR" -mindepth 1 -maxdepth 1 -print -quit)" || {
+      echo "Production empty-root bootstrap could not inspect the failed releases directory." >&2
+      return 1
+    }
+  fi
+  if [ -n "$failed_release_entry" ]; then
+    echo "Production empty-root bootstrap requires no failed managed releases." >&2
+    return 1
+  fi
+  local legacy_path
+  for legacy_path in \
+    "$APP_DIR/client" \
+    "$APP_DIR/server" \
+    "$APP_DIR/scripts" \
+    "$APP_DIR/package.json" \
+    "$APP_DIR/deploy/docker-compose.lighthouse.yml"; do
+    [ ! -e "$legacy_path" ] && [ ! -L "$legacy_path" ] || {
+      echo "Production empty-root bootstrap requires no legacy application tree." >&2
+      return 1
+    }
+  done
+  command -v ss >/dev/null 2>&1 || {
+    echo "ss is required to inspect the production upstream port." >&2
+    return 1
+  }
+  socket_table="$(ss -H -ltn 2>/dev/null)" || {
+    echo "Production empty-root bootstrap could not inspect listening TCP sockets." >&2
+    return 1
+  }
+  if printf '%s\n' "$socket_table" | grep -Eq '(^|[[:space:]])(\*|[^[:space:]]*:)8080([[:space:]]|$)'; then
+    echo "Production upstream port 8080 is already listening." >&2
+    return 1
+  fi
+  local container_rows container_name compose_project_name target_container_count=0
+  container_rows="$(run_docker_command ps -a --format '{{.Names}}\t{{.Label "com.docker.compose.project"}}')" || {
+    echo "Production empty-root bootstrap could not inspect Docker containers." >&2
+    return 1
+  }
+  while IFS=$'\t' read -r container_name compose_project_name; do
+    [ -n "$container_name" ] || continue
+    if [ "$compose_project_name" = project-management ] \
+      || { [[ "$container_name" == project-management-* ]] \
+        && [[ "$container_name" != project-management-staging-* ]]; }; then
+      target_container_count=$((target_container_count + 1))
+    fi
+  done <<< "$container_rows"
+  [ "$target_container_count" -eq 0 ] || {
+    echo "Production empty-root bootstrap requires no existing production target containers." >&2
+    return 1
+  }
+}
+
 [ -f "$STABLE_ENV_FILE" ] || { echo "Missing production env file: $STABLE_ENV_FILE" >&2; exit 1; }
 [ -f "$PEER_RUNTIME_ENV_FILE" ] || { echo "Missing peer runtime env file: $PEER_RUNTIME_ENV_FILE" >&2; exit 1; }
 [ "$(readlink -f "$STABLE_ENV_FILE")" != "$(readlink -f "$PEER_RUNTIME_ENV_FILE")" ] || {
@@ -381,6 +483,62 @@ run_docker_compose() {
   fi
 }
 
+has_governed_compose_contract() {
+  local root="$1" compose_json
+  compose_json="$(run_docker_compose "$root" \
+    0000000000000000000000000000000000000000 \
+    000_contract.sql \
+    0000000000000000000000000000000000000000000000000000000000000000 \
+    config --no-env-resolution --format json 2>/dev/null)" || return 1
+  COMPOSE_JSON="$compose_json" RELEASE_ROOT="$root" python3 -c '
+import json
+import os
+
+services = json.loads(os.environ["COMPOSE_JSON"]).get("services") or {}
+expected = {
+    "api": ("server", "prebuilt-runtime"),
+    "worker": ("server", "prebuilt-runtime"),
+    "web": ("client", "prebuilt-runtime"),
+}
+root = os.path.realpath(os.environ["RELEASE_ROOT"])
+for name, (directory, target) in expected.items():
+    build = (services.get(name) or {}).get("build") or {}
+    context = build.get("context")
+    if not isinstance(context, str):
+        raise SystemExit(1)
+    if not os.path.isabs(context):
+        context = os.path.join(root, "deploy", context)
+    if os.path.realpath(context) != os.path.join(root, directory) or build.get("target") != target:
+        raise SystemExit(1)
+' >/dev/null
+}
+
+has_rollback_contract() {
+  local root="$1" frontend_sha server_sha migration_entry
+  [ -d "$root" ] || return 1
+  [ -f "$root/$COMPOSE_FILE" ] || return 1
+  [ -f "$root/scripts/classify-public-ingress-url.mjs" ] || return 1
+  [ -f "$root/client/dist/workbuddy-build.json" ] || return 1
+  [ -f "$root/client/dist/index.html" ] || return 1
+  [ -f "$root/client/Dockerfile" ] || return 1
+  [ -f "$root/client/nginx.conf" ] || return 1
+  [ -f "$root/deploy/env/server.production.env" ] || return 1
+  [ -f "$root/deploy/nginx/lighthouse.conf" ] || return 1
+  frontend_sha="$(release_sha_from_manifest "$root")" || return 1
+  [ -f "$root/server/Dockerfile" ] || return 1
+  [ -f "$root/server/package.json" ] || return 1
+  [ -f "$root/server/package-lock.json" ] || return 1
+  [ -f "$root/server/dist/index.js" ] || return 1
+  [ -f "$root/server/dist/workbuddy-server-build.json" ] || return 1
+  server_sha="$(server_release_sha_from_manifest "$root")" || return 1
+  [ "$server_sha" = "$frontend_sha" ] || return 1
+  [ -d "$root/server/migrations" ] && [ ! -L "$root/server/migrations" ] || return 1
+  migration_entry="$(find "$root/server/migrations" -maxdepth 1 -type f -name '[0-9]*_*.sql' -print -quit)" \
+    || return 1
+  [ -n "$migration_entry" ] || return 1
+  has_governed_compose_contract "$root"
+}
+
 run_docker_command() {
   if [ "$USE_SUDO_DOCKER" = 1 ]; then
     sudo -n docker "$@"
@@ -388,6 +546,9 @@ run_docker_command() {
     docker "$@"
   fi
 }
+
+verify_production_empty_root_bootstrap lock-held-by-caller
+mkdir -p "$RELEASES_DIR" "$FAILED_RELEASES_DIR" "$STABLE_DATA_DIR/logs"
 
 container_inspect_value() {
   run_docker_command container inspect "$1" --format "$2" 2>/dev/null
@@ -765,7 +926,7 @@ rollback_application_release() {
 
 snapshot_legacy_release() {
   local snapshot_dir snapshot_candidate previous_sha timestamp
-  [ -f "$APP_DIR/client/dist/workbuddy-build.json" ] || return 1
+  has_rollback_contract "$APP_DIR" || return 1
   timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
   snapshot_dir="$RELEASES_DIR/legacy-$timestamp-$$"
   snapshot_candidate="$RELEASES_DIR/.legacy-candidate-$timestamp-$$"
@@ -809,14 +970,24 @@ PREVIOUS_TARGET="$(resolve_current_release_target)" || {
   exit 1
 }
 if [ -z "$PREVIOUS_TARGET" ]; then
-  if [ -f "$APP_DIR/client/dist/workbuddy-build.json" ]; then
+  managed_release_entry="$(find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -print -quit)" || {
+    echo "Managed releases could not be inspected before deployment." >&2
+    exit 1
+  }
+  if [ -n "$managed_release_entry" ]; then
+    echo "Managed releases exist without a current release pointer." >&2
+    exit 1
+  elif has_rollback_contract "$APP_DIR"; then
     PREVIOUS_TARGET="$(snapshot_legacy_release)" || { echo "Existing tree could not be captured as a rollback release." >&2; exit 1; }
-  elif [ "$INITIAL_RUNTIME_BOOTSTRAP" != true ]; then
+  elif [ "$INITIAL_RUNTIME_BOOTSTRAP" != true ] && [ "$PRODUCTION_EMPTY_ROOT_BOOTSTRAP" != true ]; then
     echo "No rollback-capable previous release exists; explicit initial bootstrap is required." >&2
     exit 1
   fi
 elif [[ "$PREVIOUS_TARGET" != "$RELEASES_DIR/"* ]] || [ ! -d "$PREVIOUS_TARGET" ]; then
   echo "Current application pointer is outside the managed releases directory." >&2
+  exit 1
+elif ! has_rollback_contract "$PREVIOUS_TARGET"; then
+  echo "Current managed release is not rollback-capable." >&2
   exit 1
 fi
 

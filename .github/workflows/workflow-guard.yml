@@ -23,6 +23,8 @@ on:
       - 'scripts/production-runtime-recovery.contract.test.mjs'
       - 'scripts/domain-sni-ingress.contract.test.mjs'
       - 'scripts/application-release-atomicity.contract.test.mjs'
+      - 'scripts/production-empty-root-bootstrap.contract.test.mjs'
+      - 'scripts/check-production-empty-root-bootstrap.sh'
       - 'scripts/provision-lighthouse-domain-ingress.sh'
       - 'deploy/ingress/**'
       - 'deploy/docker-compose.ingress.yml'
@@ -341,6 +343,8 @@ on:
       - 'scripts/production-runtime-recovery.contract.test.mjs'
       - 'scripts/domain-sni-ingress.contract.test.mjs'
       - 'scripts/application-release-atomicity.contract.test.mjs'
+      - 'scripts/production-empty-root-bootstrap.contract.test.mjs'
+      - 'scripts/check-production-empty-root-bootstrap.sh'
       - 'scripts/provision-lighthouse-domain-ingress.sh'
       - 'deploy/ingress/**'
       - 'deploy/docker-compose.ingress.yml'
@@ -693,6 +697,10 @@ jobs:
       - name: Verify application release atomicity contract
         working-directory: .
         run: node --test scripts/application-release-atomicity.contract.test.mjs
+
+      - name: Verify production empty-root bootstrap contract
+        working-directory: .
+        run: node --test scripts/production-empty-root-bootstrap.contract.test.mjs
 
       - name: Build server for staging learning-cycle contract
         run: npm run build
