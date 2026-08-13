@@ -497,6 +497,13 @@ describe('wbsTemplateCandidateEventService', () => {
     )
     expect(atomicSql).toContain("'duration_learning_outbox_event_key', $18::text")
     expect(atomicSql).not.toContain("'duration_learning_outbox_event_key', $18\n")
+    const atomicParams = effects[0]?.[1] as unknown[]
+    for (const index of [6, 13]) {
+      expect(typeof atomicParams[index]).toBe('string')
+      expect(() => JSON.parse(String(atomicParams[index]))).not.toThrow()
+    }
+    expect(JSON.parse(String(atomicParams[6]))).toEqual([])
+    expect(JSON.parse(String(atomicParams[13]))).toEqual(input.generatedEntityIds)
     expect(mocks.eventInsert).not.toHaveBeenCalled()
     expect(mocks.aggregationUpsert).not.toHaveBeenCalled()
     expect(mocks.planNetworkOutcomeUpsert).not.toHaveBeenCalled()
