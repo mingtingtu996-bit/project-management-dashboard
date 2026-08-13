@@ -601,11 +601,34 @@ export type WarningNotificationSyncOptions = {
 }
 
 const DEFAULT_WARNING_NOTIFICATION_WRITE_CONCURRENCY = 8
+const NOTIFICATION_TASK_FOREIGN_KEY = 'notifications_task_id_fkey'
 
 function normalizeWarningNotificationWriteConcurrency(value: unknown) {
   const parsed = Number(value)
   if (!Number.isFinite(parsed)) return DEFAULT_WARNING_NOTIFICATION_WRITE_CONCURRENCY
   return Math.max(1, Math.min(32, Math.trunc(parsed)))
+}
+
+function isNotificationTaskForeignKeyViolation(error: unknown) {
+  const candidate = error as {
+    code?: unknown
+    constraint?: unknown
+    message?: unknown
+    details?: unknown
+  } | null
+  const code = String(candidate?.code ?? '').trim()
+  const constraint = String(candidate?.constraint ?? '').trim()
+  const errorText = [
+    candidate?.message,
+    candidate?.details,
+    error instanceof Error ? error.message : error,
+  ].map((value) => String(value ?? '').toLowerCase()).join(' ')
+  const targetsTaskConstraint = constraint === NOTIFICATION_TASK_FOREIGN_KEY
+    || errorText.includes(NOTIFICATION_TASK_FOREIGN_KEY)
+  const isForeignKeyViolation = code === '23503'
+    || errorText.includes('foreign key constraint')
+
+  return targetsTaskConstraint && isForeignKeyViolation
 }
 
 async function mapWithConcurrency<T, R>(
@@ -901,12 +924,25 @@ export async function syncWarningNotifications(
     writeItems,
     normalizeWarningNotificationWriteConcurrency(options.writeConcurrency),
     async ({ warning, signature, naturalKey }) => {
-      const row = await upsertWarningNotification(
-        { ...warning, warning_signature: signature },
-        existingBySignature.get(signature) ?? existingByNaturalKey.get(naturalKey) ?? null,
-        recipientResolver,
-      )
-      return notificationToWarning(row)
+      try {
+        const row = await upsertWarningNotification(
+          { ...warning, warning_signature: signature },
+          existingBySignature.get(signature) ?? existingByNaturalKey.get(naturalKey) ?? null,
+          recipientResolver,
+        )
+        return notificationToWarning(row)
+      } catch (error) {
+        if (!isNotificationTaskForeignKeyViolation(error)) throw error
+        logger.warn(
+          '[upgradeChain] skipped warning after source task was deleted during notification persistence',
+          {
+            projectId: warning.project_id,
+            taskId: warning.task_id ?? null,
+            warningSignature: signature,
+          },
+        )
+        return null
+      }
     },
   )
 
@@ -936,7 +972,7 @@ export async function syncWarningNotifications(
     await markRiskPendingManualCloseForResolvedWarning(item)
   }
 
-  return synced.sort((left, right) => {
+  return synced.filter((item): item is Warning => item !== null).sort((left, right) => {
     const rankDiff = severityRank(right.warning_level) - severityRank(left.warning_level)
     if (rankDiff !== 0) return rankDiff
     return String(right.created_at ?? '').localeCompare(String(left.created_at ?? ''))

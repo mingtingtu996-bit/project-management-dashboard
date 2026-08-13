@@ -3370,6 +3370,14 @@
     },
     {
       "kind": "migration",
+      "id": "338_risk_issue_atomic_closure_outcome",
+      "architectureUnit": "主执行环：行动闭环",
+      "runtimeScope": "business_core",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13",
+      "assignmentReason": "keeps atomic risk-to-issue conversion compatible with structured closure outcome constraints"
+    },
+    {
+      "kind": "migration",
       "id": "CLEAN_MIGRATION",
       "architectureUnit": "底座：平台运行观测",
       "runtimeScope": "platform_foundation",
