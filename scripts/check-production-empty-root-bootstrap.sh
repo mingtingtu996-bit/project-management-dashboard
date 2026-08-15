@@ -49,11 +49,12 @@ print(value, end="")
 
 read_compose_contract() {
   local root="$1" compose_json
-  compose_json="$(RELEASE_SHA=0000000000000000000000000000000000000000 \
+  compose_json="$(run_docker_command \
+    RELEASE_SHA=0000000000000000000000000000000000000000 \
     DEPLOY_TARGET=production \
     EXPECTED_SCHEMA_MIGRATION_FILENAME=000_contract.sql \
     EXPECTED_SCHEMA_MIGRATION_CHECKSUM=0000000000000000000000000000000000000000000000000000000000000000 \
-    "${docker_command[@]}" compose \
+    compose \
       --env-file "$root/deploy/env/server.production.env" \
       -f "$root/deploy/docker-compose.lighthouse.yml" \
       config --no-env-resolution --format json 2>/dev/null)" || return 1
@@ -78,6 +79,25 @@ for name, (directory, target) in expected.items():
     if os.path.realpath(context) != os.path.join(root, directory) or build.get("target") != target:
         raise SystemExit(1)
 ' >/dev/null
+}
+
+run_docker_command() {
+  local -a env_assignments=()
+  while [ "$#" -gt 0 ] && [[ "$1" == *=* ]]; do
+    env_assignments+=("$1")
+    shift
+  done
+  if [ "${docker_command[0]}" = sudo ]; then
+    sudo -n env "${env_assignments[@]}" docker "$@"
+    return
+  fi
+  (
+    local assignment
+    for assignment in "${env_assignments[@]}"; do
+      export "$assignment"
+    done
+    docker "$@"
+  )
 }
 
 has_rollback_contract() {
@@ -189,7 +209,7 @@ if printf '%s\n' "$socket_table" | grep -Eq '(^|[[:space:]])(\*|[^[:space:]]*:)8
   fail "production upstream port 8080 is already listening"
 fi
 
-container_rows="$("${docker_command[@]}" ps -a --format '{{.Names}}\t{{.Label "com.docker.compose.project"}}')" \
+container_rows="$(run_docker_command ps -a --format '{{.Names}}\t{{.Label "com.docker.compose.project"}}')" \
   || fail "unable to inspect Docker containers"
 target_container_count=0
 while IFS=$'\t' read -r container_name compose_project_name; do
