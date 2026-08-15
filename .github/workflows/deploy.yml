@@ -1113,6 +1113,7 @@ jobs:
           plan_output="$(npm run --silent migrate:plan)"
           drop_guard_args=()
           for migration in \
+            309_v14231_runtime_consumer_evidence_runtime_rls.sql \
             311_retire_product_runtime_progress_knowledge_governance.sql \
             316_task_fact_write_integrity.sql \
             321_retire_duplicate_t2_schedule_runtime.sql \

@@ -21,7 +21,11 @@ describe('pending migration DROP target workflow contract', () => {
     expect(diagnoseIndex).toBeGreaterThan(-1)
     expect(dropPreflightIndex).toBeGreaterThan(diagnoseIndex)
     expect(applyIndex).toBeGreaterThan(dropPreflightIndex)
-    expect(workflow.slice(dropPreflightIndex, applyIndex)).toContain('npm run guard:pending-migration-drop-targets')
+    const dropPreflightBlock = workflow.slice(dropPreflightIndex, applyIndex)
+    expect(dropPreflightBlock).toContain('npm run guard:pending-migration-drop-targets')
+    expect(dropPreflightBlock).toContain(
+      '309_v14231_runtime_consumer_evidence_runtime_rls.sql',
+    )
     expect(workflow).toContain('--allow-target-catalog-preflight')
     expect(serverPackage.scripts?.['guard:pending-migration-drop-targets']).toContain(
       'check-pending-migration-drop-targets.ts',
