@@ -45,6 +45,12 @@ ss() {
 }
 docker() {
   if [ "\${1:-}" = compose ]; then
+    if [ "\${MOCK_REQUIRE_COMPOSE_ENV:-0}" = 1 ]; then
+      [ -n "\${RELEASE_SHA:-}" ] || return 1
+      [ -n "\${DEPLOY_TARGET:-}" ] || return 1
+      [ -n "\${EXPECTED_SCHEMA_MIGRATION_FILENAME:-}" ] || return 1
+      [ -n "\${EXPECTED_SCHEMA_MIGRATION_CHECKSUM:-}" ] || return 1
+    fi
     shift
     while [ "$#" -gt 0 ]; do
       case "$1" in
@@ -73,6 +79,34 @@ docker() {
     *) return 0 ;;
   esac
 }
+if [ "\${MOCK_USE_SUDO:-0}" = 1 ]; then
+sudo() {
+  [ "\${1:-}" = -n ] || return 1
+  shift
+  if [ "\${1:-}" = docker ]; then
+    shift
+    (
+      unset RELEASE_SHA DEPLOY_TARGET EXPECTED_SCHEMA_MIGRATION_FILENAME EXPECTED_SCHEMA_MIGRATION_CHECKSUM
+      MOCK_DOCKER_INFO_STATUS=0 docker "\$@"
+    )
+    return
+  fi
+  if [ "\${1:-}" = env ]; then
+    shift
+    (
+      while [ "\${1:-}" != docker ] && [ "\$#" -gt 0 ]; do
+        export "\$1"
+        shift
+      done
+      [ "\${1:-}" = docker ] || return 1
+      shift
+      docker "\$@"
+    )
+    return
+  fi
+  return 1
+}
+fi
 `,
     'utf8',
   )
@@ -295,6 +329,25 @@ test('production empty-root proof accepts only a clean managed root with port 80
     upstreamListening: false,
     targetContainerCount: 0,
   })
+})
+
+test('production upgrade preflight preserves Compose contract variables through sudo Docker access', async () => {
+  const result = await runPreflight({
+    bootstrapConfirmation: '',
+    setup: async (appDir) => {
+      const releaseDir = join(appDir, 'releases', 'c'.repeat(40))
+      await writeRollbackContract(releaseDir, 'c'.repeat(40))
+      await symlink(releaseDir, join(appDir, 'current'), process.platform === 'win32' ? 'junction' : 'dir')
+    },
+    env: {
+      MOCK_DOCKER_INFO_STATUS: '1',
+      MOCK_USE_SUDO: '1',
+      MOCK_REQUIRE_COMPOSE_ENV: '1',
+    },
+  })
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
+  assert.equal(JSON.parse(result.stdout).rollbackSource, 'managed_current')
 })
 
 test('production pre-migration proof rejects an empty root without bootstrap authorization', async () => {
