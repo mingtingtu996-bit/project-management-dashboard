@@ -28,7 +28,8 @@ const MIGRATION_LOCK_TIMEOUT_MS = 10_000
 const MIGRATION_STATEMENT_TIMEOUT_MS = 15 * 60 * 1_000
 const COMMERCIAL_TRIGGER_RPC_ACL_CLOSEOUT_FILENAME = '308_commercial_trigger_rpc_acl_closeout.sql'
 const EXECUTION_FACT_GOVERNANCE_FILENAME = '326_execution_fact_governance.sql'
-const EXECUTION_FACT_BACKFILL_PREFIX = 'WITH candidate_facts AS (\n'
+const EXECUTION_FACT_BACKFILL_SOURCE_PREFIX = 'WITH candidate_facts AS (\n'
+const EXECUTION_FACT_BACKFILL_PREFIX = 'WITH candidate_facts (company_id, project_id, entity_type, entity_id, fact_type, fact_value, effective_at) AS (\n'
 const EXECUTION_FACT_BACKFILL_TAIL = '\n), backfill AS ('
 const EXECUTION_FACT_BACKFILL_BRANCH_SEPARATOR = '\n  UNION ALL\n'
 const EXECUTION_FACT_POST_BACKFILL_START = 'REVOKE ALL ON FUNCTION workbuddy_private.ensure_execution_fact_event_scope()'
@@ -516,7 +517,7 @@ function replaceRequiredMigrationFragment(sql: string, source: string, replaceme
 }
 
 function prepareExecutionFactGovernanceBatches(managedSql: string) {
-  const backfillStart = managedSql.indexOf(EXECUTION_FACT_BACKFILL_PREFIX)
+  const backfillStart = managedSql.indexOf(EXECUTION_FACT_BACKFILL_SOURCE_PREFIX)
   const postBackfillStart = managedSql.indexOf(EXECUTION_FACT_POST_BACKFILL_START, backfillStart)
   if (backfillStart < 0 || postBackfillStart <= backfillStart) {
     throw new Error('Migration 326 batching contract mismatch: backfill boundaries are missing')
@@ -554,7 +555,7 @@ $$;`
     throw new Error('Migration 326 batching contract mismatch: backfill tail is missing')
   }
   const candidateBranches = backfillSql
-    .slice(EXECUTION_FACT_BACKFILL_PREFIX.length, backfillTailStart)
+    .slice(EXECUTION_FACT_BACKFILL_SOURCE_PREFIX.length, backfillTailStart)
     .split(EXECUTION_FACT_BACKFILL_BRANCH_SEPARATOR)
   if (candidateBranches.length !== 15 || candidateBranches.some((branch) => !branch.trimStart().startsWith('SELECT '))) {
     throw new Error('Migration 326 batching contract mismatch: expected 15 candidate fact branches')

@@ -494,8 +494,8 @@ describe('migration runner contract', () => {
 
     const phaseSql = queries
       .map(({ sql }) => sql)
-      .filter((sql) => sql.includes('BEGIN MIGRATION 326') || sql.includes('WITH candidate_facts AS (') || sql.includes('CREATE OR REPLACE VIEW public.current_execution_facts'))
-    const backfillPhases = phaseSql.filter((sql) => sql.includes('WITH candidate_facts AS ('))
+      .filter((sql) => sql.includes('BEGIN MIGRATION 326') || sql.includes('WITH candidate_facts (') || sql.includes('CREATE OR REPLACE VIEW public.current_execution_facts'))
+    const backfillPhases = phaseSql.filter((sql) => sql.includes('WITH candidate_facts ('))
     const ledgerQuery = queries.find(({ sql }) => sql.includes('INSERT INTO public.schema_migrations'))
 
     expect(backfillPhases).toHaveLength(15)
