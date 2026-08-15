@@ -83,7 +83,7 @@ describe('release server test suite contract', () => {
       const source = readFileSync(resolve(serverRoot, 'src', '__tests__', testFile), 'utf8')
       expect(source, testFile).not.toContain("process.cwd().endsWith('\\\\server')")
     }
-    expect(serverQualityJob).toContain('timeout-minutes: 90')
+    expect(serverQualityJob).toContain('timeout-minutes: 120')
     expect(serverTestsStep).toContain('run: npm run test:release')
     expect(serverTestsStep).not.toContain('working-directory: .')
     expect(serverTestsStep).not.toContain('--root server')
