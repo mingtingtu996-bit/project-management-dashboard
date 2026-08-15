@@ -70,9 +70,27 @@ describe('risk-to-issue atomic closure outcome migration', () => {
       readFileSync(resolve(serverRoot, 'src', 'registry', 'system-domain-registry.json'), 'utf8'),
     ) as { entries?: Array<{ kind?: string; id?: string }> }
 
-    expect(cleanBundle).toContain('CANONICAL: current clean bootstrap bundle, synchronized through migration 338')
-    expect(cleanBundle).toContain(`Source: ${migrationName}`)
-    expect(cleanBundle.trimEnd().endsWith(forward)).toBe(true)
+    const latestBundledMigration = Math.max(
+      ...Array.from(cleanBundle.matchAll(/^-- Source: (\d+)_/gm), (match) => Number(match[1])),
+    )
+    expect(cleanBundle).toContain(
+      `CANONICAL: current clean bootstrap bundle, synchronized through migration ${latestBundledMigration}`,
+    )
+    const sourceHeader = [
+      '-- ============================================================',
+      `-- Source: ${migrationName}`,
+      '-- ============================================================',
+    ].join('\n')
+    const sourceIndex = cleanBundle.indexOf(sourceHeader)
+    const nextSourceIndex = cleanBundle.indexOf(
+      '\n-- ============================================================\n-- Source:',
+      sourceIndex + sourceHeader.length,
+    )
+    const bundledForward = cleanBundle
+      .slice(sourceIndex + sourceHeader.length, nextSourceIndex >= 0 ? nextSourceIndex : undefined)
+      .trim()
+    expect(sourceIndex).toBeGreaterThanOrEqual(0)
+    expect(bundledForward).toBe(forward)
     expect(registry.entries).toContainEqual(expect.objectContaining({
       kind: 'migration',
       id: '338_risk_issue_atomic_closure_outcome',
