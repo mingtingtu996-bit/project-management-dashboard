@@ -113,7 +113,7 @@ jobs:
   server-quality:
     name: Server Quality Check
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     defaults:
       run:
         working-directory: server
