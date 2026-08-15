@@ -112,4 +112,30 @@ describe('NotificationLifecycleService retention policy', () => {
     expect(mocks.deleteNotificationById).not.toHaveBeenCalled()
     expect(mocks.updateNotificationById).not.toHaveBeenCalled()
   })
+
+  it('skips stale resolved notifications that have no safe scope for mutation', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-16T00:00:00.000Z'))
+    mocks.listNotifications.mockResolvedValue([
+      {
+        ...baseNotification,
+        id: 'legacy-unscoped-resolved',
+        project_id: null,
+        company_id: null,
+        user_id: null,
+        status: 'resolved',
+        lifecycle_status: 'resolved',
+        warning_lifecycle_status: 'resolved',
+        created_at: '2026-01-01T00:00:00.000Z',
+        updated_at: '2026-01-01T00:00:00.000Z',
+        resolved_at: '2026-01-01T00:00:00.000Z',
+      },
+    ])
+
+    const result = await new NotificationLifecycleService().runRetentionPolicy()
+
+    expect(result).toEqual({ archived: 0, deleted: 0 })
+    expect(mocks.updateNotificationById).not.toHaveBeenCalled()
+    expect(mocks.deleteNotificationById).not.toHaveBeenCalled()
+  })
 })

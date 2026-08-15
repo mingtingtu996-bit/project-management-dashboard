@@ -69,6 +69,16 @@ function mergeMetadata(notification: Notification, patch: Record<string, unknown
   }
 }
 
+function hasNotificationMutationScope(
+  notification: Pick<Notification, 'project_id' | 'company_id' | 'user_id'>,
+) {
+  return Boolean(
+    String(notification.project_id ?? '').trim()
+    || String(notification.company_id ?? '').trim()
+    || String(notification.user_id ?? '').trim(),
+  )
+}
+
 export interface NotificationLifecycleResult {
   archived: number
   deleted: number
@@ -85,8 +95,14 @@ export class NotificationLifecycleService {
     const timestamp = nowIso()
     let archived = 0
     let deleted = 0
+    let skippedUnscoped = 0
 
     for (const notification of notifications) {
+      if (!hasNotificationMutationScope(notification)) {
+        skippedUnscoped += 1
+        continue
+      }
+
       const normalizedStatus = String(notification.status ?? '').trim().toLowerCase()
       const normalizedWarningLifecycleStatus = String(notification.warning_lifecycle_status ?? '').trim().toLowerCase()
 
@@ -129,6 +145,7 @@ export class NotificationLifecycleService {
     logger.info('[notificationLifecycleService] retention policy executed', {
       archived,
       deleted,
+      skippedUnscoped,
     })
 
     return { archived, deleted }
