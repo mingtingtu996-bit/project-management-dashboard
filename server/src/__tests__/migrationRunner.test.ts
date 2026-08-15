@@ -474,6 +474,46 @@ describe('migration runner contract', () => {
     expect(queries.at(-1)?.sql).toBe('COMMIT')
   })
 
+  it('batches migration 326 backfill branches while preserving its source checksum', async () => {
+    const migrationPath = resolve(serverRoot, 'migrations', '326_execution_fact_governance.sql')
+    const sourceSql = readFileSync(migrationPath, 'utf8')
+    const queries: Array<{ sql: string; params?: unknown[] }> = []
+    const fakeClient = {
+      query: async (sql: string, params?: unknown[]) => {
+        queries.push({ sql, params })
+        return { rows: [] }
+      },
+    } as any
+
+    await applyMigration(fakeClient, {
+      filename: '326_execution_fact_governance.sql',
+      version: '326',
+      name: 'execution_fact_governance',
+      fullPath: migrationPath,
+    })
+
+    const phaseSql = queries
+      .map(({ sql }) => sql)
+      .filter((sql) => sql.includes('BEGIN MIGRATION 326') || sql.includes('WITH candidate_facts AS (') || sql.includes('CREATE OR REPLACE VIEW public.current_execution_facts'))
+    const backfillPhases = phaseSql.filter((sql) => sql.includes('WITH candidate_facts AS ('))
+    const ledgerQuery = queries.find(({ sql }) => sql.includes('INSERT INTO public.schema_migrations'))
+
+    expect(backfillPhases).toHaveLength(15)
+    expect(backfillPhases.every((sql) => !sql.includes('UNION ALL'))).toBe(true)
+    expect(queries.filter(({ sql }) => sql === 'BEGIN')).toHaveLength(backfillPhases.length + 2)
+    expect(queries.filter(({ sql }) => sql === 'COMMIT')).toHaveLength(backfillPhases.length + 2)
+    expect(phaseSql[0]).toContain('CREATE UNIQUE INDEX IF NOT EXISTS uq_execution_fact_events_superseded_once')
+    expect(phaseSql[0]).toContain('REVOKE ALL ON TABLE public.execution_fact_events FROM PUBLIC, anon, authenticated, workbuddy_runtime')
+    expect(phaseSql.at(-1)).toContain('CREATE OR REPLACE VIEW public.current_execution_facts')
+    expect(ledgerQuery?.params).toEqual([
+      '326_execution_fact_governance.sql',
+      '326',
+      calculateMigrationChecksum(sourceSql),
+    ])
+    expect(sourceSql).toContain('CREATE UNIQUE INDEX uq_execution_fact_events_superseded_once')
+    expect(sourceSql).not.toContain('CREATE UNIQUE INDEX IF NOT EXISTS uq_execution_fact_events_superseded_once')
+  })
+
   it('runs the exact migration 308 ACL postcondition before writing its ledger row', async () => {
     const tempDir = await mkdtemp(resolve(tmpdir(), 'workbuddy-migration-'))
     const migrationPath = resolve(tempDir, '308_commercial_trigger_rpc_acl_closeout.sql')

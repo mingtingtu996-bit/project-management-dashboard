@@ -27,6 +27,11 @@ const MIGRATION_ADVISORY_LOCK_KEY = 1_424_231
 const MIGRATION_LOCK_TIMEOUT_MS = 10_000
 const MIGRATION_STATEMENT_TIMEOUT_MS = 15 * 60 * 1_000
 const COMMERCIAL_TRIGGER_RPC_ACL_CLOSEOUT_FILENAME = '308_commercial_trigger_rpc_acl_closeout.sql'
+const EXECUTION_FACT_GOVERNANCE_FILENAME = '326_execution_fact_governance.sql'
+const EXECUTION_FACT_BACKFILL_PREFIX = 'WITH candidate_facts AS (\n'
+const EXECUTION_FACT_BACKFILL_TAIL = '\n), backfill AS ('
+const EXECUTION_FACT_BACKFILL_BRANCH_SEPARATOR = '\n  UNION ALL\n'
+const EXECUTION_FACT_POST_BACKFILL_START = 'REVOKE ALL ON FUNCTION workbuddy_private.ensure_execution_fact_event_scope()'
 export const APPLY_MIGRATION_CHECKSUM_CONTRACT_VERSION = 1 as const
 export const BASELINE_SENTINEL_TABLES = ['projects', 'tasks', 'users', 'notifications'] as const
 
@@ -114,7 +119,7 @@ export async function discoverMigrationFiles(migrationsDir: string) {
     .map((entry) => {
       const match = entry.name.match(MIGRATION_FILE_PATTERN)
       if (!match?.groups) {
-        throw new Error(`无法解析 migration 文件名: ${entry.name}`)
+        throw new Error(`???? migration ???: ${entry.name}`)
       }
 
       return {
@@ -130,7 +135,7 @@ export async function discoverMigrationFiles(migrationsDir: string) {
   for (const migration of migrations) {
     const duplicatedFilename = seenVersions.get(migration.version)
     if (duplicatedFilename) {
-      throw new Error(`migration 版本重复: ${migration.version} -> ${duplicatedFilename}, ${migration.filename}`)
+      throw new Error(`migration ????: ${migration.version} -> ${duplicatedFilename}, ${migration.filename}`)
     }
     seenVersions.set(migration.version, migration.filename)
   }
@@ -359,7 +364,7 @@ export function resolveMigrationConnectionConfig(
 
   if (!host || !password) {
     throw new Error(
-      '缺少迁移数据库连接信息，请提供 SUPABASE_MIGRATION_URL、DIRECT_DATABASE_URL、DATABASE_URL、DB_CONNECTION_STRING，或 PGHOST/PGPASSWORD。',
+      '??????????????? SUPABASE_MIGRATION_URL?DIRECT_DATABASE_URL?DATABASE_URL?DB_CONNECTION_STRING?? PGHOST/PGPASSWORD?',
     )
   }
 
@@ -502,6 +507,76 @@ function prepareMigrationSqlForManagedTransaction(sql: string) {
   return lines.join('\n')
 }
 
+function replaceRequiredMigrationFragment(sql: string, source: string, replacement: string) {
+  const firstIndex = sql.indexOf(source)
+  if (firstIndex < 0 || sql.indexOf(source, firstIndex + source.length) >= 0) {
+    throw new Error(`Migration 326 batching contract mismatch: expected one ${source}`)
+  }
+  return `${sql.slice(0, firstIndex)}${replacement}${sql.slice(firstIndex + source.length)}`
+}
+
+function prepareExecutionFactGovernanceBatches(managedSql: string) {
+  const backfillStart = managedSql.indexOf(EXECUTION_FACT_BACKFILL_PREFIX)
+  const postBackfillStart = managedSql.indexOf(EXECUTION_FACT_POST_BACKFILL_START, backfillStart)
+  if (backfillStart < 0 || postBackfillStart <= backfillStart) {
+    throw new Error('Migration 326 batching contract mismatch: backfill boundaries are missing')
+  }
+
+  let schemaPhase = managedSql.slice(0, backfillStart).trim()
+  const rerunnableIndexes = [
+    ['CREATE UNIQUE INDEX uq_execution_fact_events_superseded_once', 'CREATE UNIQUE INDEX IF NOT EXISTS uq_execution_fact_events_superseded_once'],
+    ['CREATE INDEX idx_execution_fact_events_stream', 'CREATE INDEX IF NOT EXISTS idx_execution_fact_events_stream'],
+    ['CREATE INDEX idx_execution_fact_events_source', 'CREATE INDEX IF NOT EXISTS idx_execution_fact_events_source'],
+  ] as const
+  for (const [source, replacement] of rerunnableIndexes) {
+    schemaPhase = replaceRequiredMigrationFragment(schemaPhase, source, replacement)
+  }
+
+  // Phase commits make the new table visible, so deny runtime access before any backfill batch commits.
+  schemaPhase += `
+
+REVOKE ALL ON FUNCTION workbuddy_private.ensure_execution_fact_event_scope()
+  FROM PUBLIC, anon, authenticated, workbuddy_runtime;
+REVOKE ALL ON FUNCTION workbuddy_private.reject_execution_fact_event_mutation()
+  FROM PUBLIC, anon, authenticated, workbuddy_runtime;
+REVOKE ALL ON TABLE public.execution_fact_events FROM PUBLIC, anon, authenticated, workbuddy_runtime;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+    EXECUTE 'REVOKE ALL ON TABLE public.execution_fact_events FROM service_role';
+  END IF;
+END
+$$;`
+
+  const backfillSql = managedSql.slice(backfillStart, postBackfillStart)
+  const backfillTailStart = backfillSql.indexOf(EXECUTION_FACT_BACKFILL_TAIL)
+  if (backfillTailStart < EXECUTION_FACT_BACKFILL_PREFIX.length) {
+    throw new Error('Migration 326 batching contract mismatch: backfill tail is missing')
+  }
+  const candidateBranches = backfillSql
+    .slice(EXECUTION_FACT_BACKFILL_PREFIX.length, backfillTailStart)
+    .split(EXECUTION_FACT_BACKFILL_BRANCH_SEPARATOR)
+  if (candidateBranches.length !== 15 || candidateBranches.some((branch) => !branch.trimStart().startsWith('SELECT '))) {
+    throw new Error('Migration 326 batching contract mismatch: expected 15 candidate fact branches')
+  }
+  const backfillTail = backfillSql.slice(backfillTailStart)
+  const backfillPhases = candidateBranches.map((branch) => (
+    `${EXECUTION_FACT_BACKFILL_PREFIX}${branch}${backfillTail}`.trim()
+  ))
+  const authorityPhase = managedSql.slice(postBackfillStart).trim()
+  if (!authorityPhase.includes('CREATE OR REPLACE VIEW public.current_execution_facts')) {
+    throw new Error('Migration 326 batching contract mismatch: authority view is missing')
+  }
+
+  return [schemaPhase, ...backfillPhases, authorityPhase]
+}
+
+function prepareMigrationSqlBatches(migration: MigrationFile, managedSql: string) {
+  return migration.filename === EXECUTION_FACT_GOVERNANCE_FILENAME
+    ? prepareExecutionFactGovernanceBatches(managedSql)
+    : [managedSql]
+}
+
 async function assertManagedMigrationPostcondition(
   client: InstanceType<typeof Client>,
   migration: MigrationFile,
@@ -535,28 +610,34 @@ export async function applyMigration(
     )
   }
   const managedSql = prepareMigrationSqlForManagedTransaction(sql)
+  const managedBatches = prepareMigrationSqlBatches(migration, managedSql)
 
-  await client.query('BEGIN')
-  try {
-    await client.query(`SELECT set_config('lock_timeout', $1, TRUE)`, [`${MIGRATION_LOCK_TIMEOUT_MS}ms`])
-    await client.query(`SELECT set_config('statement_timeout', $1, TRUE)`, [`${MIGRATION_STATEMENT_TIMEOUT_MS}ms`])
-    await client.query(managedSql)
-    await assertManagedMigrationPostcondition(client, migration)
-    await client.query(
-      `
-        INSERT INTO public.schema_migrations (filename, version, checksum)
-        VALUES ($1, $2, $3)
-      `,
-      [migration.filename, migration.version, checksum],
-    )
-    await client.query('COMMIT')
-  } catch (error) {
+  for (const [batchIndex, batchSql] of managedBatches.entries()) {
+    const isFinalBatch = batchIndex === managedBatches.length - 1
+    await client.query('BEGIN')
     try {
-      await client.query('ROLLBACK')
-    } catch {
-      // Preserve the original migration failure; disconnect recovery releases locks.
+      await client.query(`SELECT set_config('lock_timeout', $1, TRUE)`, [`${MIGRATION_LOCK_TIMEOUT_MS}ms`])
+      await client.query(`SELECT set_config('statement_timeout', $1, TRUE)`, [`${MIGRATION_STATEMENT_TIMEOUT_MS}ms`])
+      await client.query(batchSql)
+      if (isFinalBatch) {
+        await assertManagedMigrationPostcondition(client, migration)
+        await client.query(
+          `
+            INSERT INTO public.schema_migrations (filename, version, checksum)
+            VALUES ($1, $2, $3)
+          `,
+          [migration.filename, migration.version, checksum],
+        )
+      }
+      await client.query('COMMIT')
+    } catch (error) {
+      try {
+        await client.query('ROLLBACK')
+      } catch {
+        // Preserve the original migration failure; disconnect recovery releases locks.
+      }
+      throw error
     }
-    throw error
   }
 
   return {
