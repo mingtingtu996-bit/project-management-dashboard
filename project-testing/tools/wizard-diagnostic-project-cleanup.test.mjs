@@ -18,6 +18,12 @@ const connectionString = `postgresql://postgres.${projectRef}:secret@aws-0-ap-so
 function buildHarness(overrides = {}, options = {}) {
   const calls = []
   const clientConfigs = []
+  let riskSourceType = options.upgradeChainPresent === true ? 'warning_converted' : 'manual'
+  let riskLinkedIssueId = options.upgradeChainPresent === true ? 'issue-1' : null
+  let issueSourceType = options.upgradeChainPresent === true ? 'risk_converted' : 'manual'
+  let issuePresent = options.upgradeChainPresent === true
+  let riskPresent = options.upgradeChainPresent === true
+  const lineagePresent = options.lineagePresent !== false
   let projectRow = options.projectPresent === false
     ? null
     : {
@@ -49,6 +55,30 @@ function buildHarness(overrides = {}, options = {}) {
         deletedProject = deleted
         projectRow = null
         return { rows: deleted ? [{ id: deleted.id }] : [], rowCount: deleted ? 1 : 0 }
+      }
+      if (normalized.includes('mark_source_deleted_on_downstream_atomic')) {
+        if (!lineagePresent) return { rows: [{ transitioned_count: 0 }], rowCount: 1 }
+        riskSourceType = 'source_deleted'
+        issueSourceType = 'source_deleted'
+        return { rows: [{ transitioned_count: 2 }], rowCount: 1 }
+      }
+      if (normalized.startsWith('delete from public.issues')) {
+        if (issuePresent && issueSourceType !== 'source_deleted') {
+          throw new Error('UPGRADE_CHAIN_PROTECTED: issue linked to upgrade chain, use close instead')
+        }
+        issuePresent = false
+        return { rows: [], rowCount: 1 }
+      }
+      if (normalized.startsWith('update public.risks') && normalized.includes('linked_issue_id = null')) {
+        if (!issuePresent) riskLinkedIssueId = null
+        return { rows: [], rowCount: 1 }
+      }
+      if (normalized.startsWith('delete from public.risks')) {
+        if (riskPresent && (riskSourceType !== 'source_deleted' || riskLinkedIssueId !== null)) {
+          throw new Error('UPGRADE_CHAIN_PROTECTED: risk linked to warning upgrade chain, use close instead')
+        }
+        riskPresent = false
+        return { rows: [], rowCount: 1 }
       }
       if (normalized.startsWith('insert into public.operation_logs') && options.failAudit === true) {
         throw new Error('audit insert failed')
@@ -120,6 +150,43 @@ test('physically deletes only the exact disposable wizard diagnostic project and
     cleanupPolicy: 'guarded_migration_connection_same_transaction',
   })
   assert.deepEqual(harness.clientConfigs[0]?.ssl, { rejectUnauthorized: true })
+})
+
+test('transitions a disposable upgrade chain through source_deleted before physical deletion', async () => {
+  const harness = buildHarness({}, { upgradeChainPresent: true })
+
+  const result = await cleanupWizardDiagnosticProject(cleanupInput(), {
+    createClient: harness.createClient,
+  })
+
+  assert.equal(result.projectPhysicallyDeleted, true)
+  const normalizedCalls = harness.calls.map(([sql]) => String(sql).replace(/\s+/g, ' ').trim().toLowerCase())
+  const transitionIndex = normalizedCalls.findIndex((sql) => sql.includes('mark_source_deleted_on_downstream_atomic'))
+  const issueDeleteIndex = normalizedCalls.findIndex((sql) => sql.startsWith('delete from public.issues'))
+  const unlinkIndex = normalizedCalls.findIndex((sql) => (
+    sql.startsWith('update public.risks') && sql.includes('linked_issue_id = null')
+  ))
+  const riskDeleteIndex = normalizedCalls.findIndex((sql) => sql.startsWith('delete from public.risks'))
+
+  assert.ok(transitionIndex >= 0)
+  assert.ok(transitionIndex < issueDeleteIndex)
+  assert.ok(issueDeleteIndex < unlinkIndex)
+  assert.ok(unlinkIndex < riskDeleteIndex)
+})
+
+test('rolls back instead of deleting a protected upgrade chain when lineage is missing', async () => {
+  const harness = buildHarness({}, { upgradeChainPresent: true, lineagePresent: false })
+
+  await assert.rejects(
+    cleanupWizardDiagnosticProject(cleanupInput(), {
+      createClient: harness.createClient,
+    }),
+    /UPGRADE_CHAIN_PROTECTED/u,
+  )
+
+  assert.equal(harness.isProjectPresent(), true)
+  assert.equal(harness.calls.some(([sql]) => String(sql).trim() === 'ROLLBACK'), true)
+  assert.equal(harness.calls.some(([sql]) => String(sql).startsWith('DELETE FROM public.projects')), false)
 })
 
 test('cleans a historical diagnostic project while preserving the current cleanup release identity', async () => {
