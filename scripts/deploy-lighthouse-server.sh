@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 : "${APP_DIR:?APP_DIR is required}"
 : "${RELEASE_SHA:?RELEASE_SHA is required}"

@@ -11,9 +11,6 @@ const PROJECT_DELETE_CLEANUP_TABLES = [
   'task_obstacles',
   'task_timeline_events',
   'notifications',
-  'risks',
-  'issues',
-  'tasks',
 ]
 
 function requireText(value, label) {
@@ -249,9 +246,48 @@ export async function cleanupWizardDiagnosticProject(input, dependencies = {}) {
     }
 
     assertPersistedDiagnosticIdentity(project, validated)
+    await client.query(
+      `WITH source_refs AS MATERIALIZED (
+         SELECT DISTINCT
+                source_entity_type,
+                COALESCE(NULLIF(BTRIM(source_entity_id), ''), source_id::TEXT) AS source_entity_id
+           FROM public.risks
+          WHERE project_id = $1
+         UNION
+         SELECT DISTINCT
+                source_entity_type,
+                COALESCE(NULLIF(BTRIM(source_entity_id), ''), source_id::TEXT) AS source_entity_id
+           FROM public.issues
+          WHERE project_id = $1
+       )
+       SELECT COALESCE(SUM(public.mark_source_deleted_on_downstream_atomic(
+                source_entity_type,
+                source_entity_id
+              )), 0)::INTEGER AS transitioned_count
+         FROM source_refs
+        WHERE source_entity_type IS NOT NULL
+          AND source_entity_id IS NOT NULL`,
+      [validated.projectId],
+    )
     for (const table of PROJECT_DELETE_CLEANUP_TABLES) {
       await client.query(`DELETE FROM public.${table} WHERE project_id = $1`, [validated.projectId])
     }
+    await client.query('DELETE FROM public.issues WHERE project_id = $1', [validated.projectId])
+    await client.query(
+      `UPDATE public.risks AS risk
+          SET linked_issue_id = NULL,
+              updated_at = NOW()
+        WHERE risk.project_id = $1
+          AND risk.linked_issue_id IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1
+              FROM public.issues AS issue
+             WHERE issue.id = risk.linked_issue_id
+          )`,
+      [validated.projectId],
+    )
+    await client.query('DELETE FROM public.risks WHERE project_id = $1', [validated.projectId])
+    await client.query('DELETE FROM public.tasks WHERE project_id = $1', [validated.projectId])
     const deleted = await client.query(
       'DELETE FROM public.projects WHERE id = $1 AND company_id = $2 RETURNING id',
       [validated.projectId, validated.companyId],

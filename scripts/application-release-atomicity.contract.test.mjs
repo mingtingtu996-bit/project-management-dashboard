@@ -68,6 +68,31 @@ test('deployment failures capture readiness and container diagnostics before rol
   )
 })
 
+test('nested deployment command failures invoke the recovery trap', async () => {
+  const script = await source('scripts/deploy-lighthouse-server.sh')
+  const strictMode = script.match(/^set -[A-Za-z]+uo pipefail$/mu)?.[0]
+  assert.ok(strictMode, 'deployment script strict mode must remain executable in isolation')
+
+  const result = runBash(`
+${strictMode}
+trap 'printf RECOVERY_TRAP_INVOKED' ERR
+run_docker_compose() {
+  return 73
+}
+start_candidate() {
+  run_docker_compose
+}
+start_candidate
+`)
+
+  assert.notEqual(result.status, 0, 'the simulated candidate start must fail')
+  assert.match(
+    result.stdout,
+    /RECOVERY_TRAP_INVOKED/u,
+    'a failure inside a deployment function must reach the recovery trap',
+  )
+})
+
 test('initial bootstrap treats an absent current pointer as no previous release', async () => {
   const script = await source('scripts/deploy-lighthouse-server.sh')
   const resolveCurrentReleaseTarget = script.match(
